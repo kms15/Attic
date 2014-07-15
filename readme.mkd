@@ -1,0 +1,11 @@
+# Attic
+
+This is a repository for my projects that are too small and insignificant to
+deserve their own git repository (yet).
+
+## License
+
+All content is released under the GNU General Public License, version 3.0 or
+later.  I can probably be convinced to release items under a different license
+for a good cause (e.g. to allow integration into an existing BSD licensed
+project).
