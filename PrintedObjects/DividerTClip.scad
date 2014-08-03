@@ -1,9 +1,9 @@
 // Clipped across two dividers (think cubicle partitions) to hold their tops at
 // a right angle.
 
-slotWidth = 27.27;
-slotDepth = 10;
-wallThickness = 9.5;
+slotWidth = 28;
+slotDepth = 13.7;
+wallThickness = 9.5 - .73/2;
 floorThickness = 4.5;
 armLength = 44;
 
