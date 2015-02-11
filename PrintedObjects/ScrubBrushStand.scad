@@ -40,7 +40,9 @@ difference() {
         sphere(r=hole1Diameter/2);
     }
     translate([hole1x + hole1Diameter/2 - floorThickness/2, -overcut, -overcut])
-        cube([floorThickness, totalLength + 2*overcut, floorThickness + 2*overcut]);
+        cube([floorThickness, totalLength + 2*overcut, floorThickness + overcut]);
+    translate([hole1x + hole1Diameter/2, -overcut, floorThickness]) rotate([-90,0,0])
+        cylinder(r=floorThickness/2, h=totalLength + 2*overcut);
 
     // slot 1
     translate([slot1x, -overcut, floorThickness + slot1Width/2])
@@ -70,5 +72,7 @@ difference() {
         sphere(r=hole3Diameter/2);
     }
     translate([hole3x + hole3Diameter/2 - floorThickness/2, -overcut, -overcut])
-        cube([floorThickness, totalLength + 2*overcut, floorThickness + 2*overcut]);
+        cube([floorThickness, totalLength + 2*overcut, floorThickness + overcut]);
+    translate([hole3x + hole3Diameter/2, -overcut, floorThickness]) rotate([-90,0,0])
+        cylinder(r=floorThickness/2, h=totalLength + 2*overcut);
 };
