@@ -1,8 +1,8 @@
-rProximal = 330;
-rDistal = 435;
+rProximal = 250;
+rDistal = 288;
 maxReach = rProximal + rDistal;
 eps = 1e-4;
-//$fn=60;
+$fn=100;
 
 module singleArmReach() {
     difference () {
@@ -30,37 +30,56 @@ module upperArmReach() {
     }
 }
 
-upperArmReach();
-rotate([0,120,0])
-    upperArmReach();
-rotate([0,-120,0])
-    upperArmReach();
+translate([0, 50])
+cylinder(r=12.5, h=500);
 
-rotate([-90,0,0]) {
-    union() {
-        cylinder(r=100, h = rProximal);
+translate([0, -125*1.4])
+color([0.5,0.5,1], 0.5)
+rotate([0,0,45])
+//translate([-125,-125])
+//square([250,250]);
+//cube([250,250,200]);
+cylinder(r=125*1.4,h=200);
 
-        translate([0,0,rProximal - rDistal])
-        cylinder(r=70, h=rDistal);
+translate([0,0,400])
+rotate([45,0,0])
+{
+    rotate([0,30,0])
+        upperArmReach();
+    rotate([0,150,0])
+        upperArmReach();
+    rotate([0,270,0])
+        upperArmReach();
+
+    rotate([-90,0,0]) {
+        union() {
+            cylinder(r=100, h = rProximal);
+
+            translate([0,0,rProximal - rDistal]) {
+                cylinder(r=70, h=rDistal);
+            }
+        }
     }
+
+
+    color([0.5,0.5,0.7], 0.5)
+    difference() {
+        translate([0, -rProximal, 0])
+            sphere(r=rDistal*(1+eps));
+        translate([0, rProximal, 0])
+            sphere(r=rDistal*(1+eps));
+    }
+
+    /*
+    // single arm reach
+    color([0.5,0.5,0.7], 0.5)
+    union() {
+        singleArmReach();
+        rotate([0,120,0])
+            singleArmReach();
+        rotate([0,-120,0])
+            singleArmReach();
+    }
+    */
 }
 
-color([0.5,0.5,0.7], 0.5)
-difference() {
-    translate([0, -rProximal, 0])
-        sphere(r=rDistal*(1+eps));
-    translate([0, rProximal, 0])
-        sphere(r=rDistal*(1+eps));
-}
-
-/*
-// single arm reach
-color([0.5,0.5,0.7], 0.5)
-union() {
-    singleArmReach();
-    rotate([0,120,0])
-        singleArmReach();
-    rotate([0,-120,0])
-        singleArmReach();
-}
-*/
