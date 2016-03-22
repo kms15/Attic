@@ -5,9 +5,20 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <cmath>
 
 void usage() {
     std::cerr << "usage:\n\tfirst_n_primes <n>\n";
+}
+
+typedef unsigned long long uint;
+
+uint upper_bound_for_nth_prime(uint n) {
+    if (n < 6) {
+        return 11;
+    } else {
+        return (uint)(n * (std::log(n) + std::log(std::log(n))));
+    }
 }
 
 int main(int argc, char** argv) {
@@ -24,27 +35,33 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // For the first version we'll use an incremental sieve
-    // (simple, but inefficient)
-    std::vector<unsigned long long> primes;
-    primes.reserve(num_primes);
-
-    unsigned long next_val = 2;
-    while (primes.size() < num_primes) {
-        bool factor_found = false;
-
-        for (size_t i = 0; i < primes.size() && i*i < next_val; ++i) {
-            if (next_val % primes[i] == 0) {
-                factor_found = true;
-                break;
-            }
+    // For this version we'll use the sieve of Eratosthenese
+    // (slightly less simple, slightly less inefficient)
+    std::vector<bool> is_prime(upper_bound_for_nth_prime(num_primes) + 1,
+            true);
+    size_t primes_found = 0;
+    size_t last_prime = 1;
+    is_prime[0] = is_prime[1] = false;
+    while (primes_found < num_primes) {
+        // skip to the next possible prime number
+        while (!is_prime[++last_prime]) {
         }
+        ++primes_found;
 
-        if (!factor_found) {
-            std::cout << next_val << "\n";
-            primes.push_back(next_val);
+        // cross off all multiples of that number
+        for (size_t mult = 2*last_prime; mult < is_prime.size();
+                mult += last_prime) {
+            is_prime[mult] = false;
         }
-        ++next_val;
+    }
+
+    // drain the sieve
+    size_t prev_prime = 1;
+    while (prev_prime != last_prime) {
+        // skip to the next possible prime number
+        while (!is_prime[++prev_prime]) {
+        }
+        std::cout << prev_prime << "\n";
     }
 
     return 0;
