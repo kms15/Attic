@@ -36,32 +36,37 @@ int main(int argc, char** argv) {
     }
 
     // For this version we'll use the sieve of Eratosthenese
-    // (slightly less simple, slightly less inefficient)
-    std::vector<bool> is_prime(upper_bound_for_nth_prime(num_primes) + 1,
-            true);
-    size_t primes_found = 0;
-    size_t last_prime = 1;
-    is_prime[0] = is_prime[1] = false;
-    while (primes_found < num_primes) {
-        // skip to the next possible prime number
-        while (!is_prime[++last_prime]) {
-        }
-        ++primes_found;
+    // optimized to consider only odd numbers
+    if (num_primes >= 1) {
+        std::vector<bool> is_prime(
+                (upper_bound_for_nth_prime(num_primes) + 1)/2,
+                true);
+        size_t primes_found = 1;
+        size_t last_prime = 1;
+        is_prime[1/2] = false;
+        while (primes_found < num_primes) {
+            // skip to the next possible prime number
+            while (!is_prime[(last_prime += 2)/2]) {
+            }
+            ++primes_found;
 
-        // cross off all multiples of that number
-        for (size_t mult = 2*last_prime; mult < is_prime.size();
-                mult += last_prime) {
-            is_prime[mult] = false;
+            // cross off all multiples of that number
+            // (skipping the multiples of 2 since they won't be odd)
+            for (size_t mult = 3*last_prime; mult/2 < is_prime.size();
+                    mult += 2*last_prime) {
+                is_prime[mult/2] = false;
+            }
         }
-    }
 
-    // drain the sieve
-    size_t prev_prime = 1;
-    while (prev_prime != last_prime) {
-        // skip to the next possible prime number
-        while (!is_prime[++prev_prime]) {
+        // drain the sieve
+        std::cout << "2\n";
+        size_t prev_prime = 1;
+        while (prev_prime != last_prime) {
+            // skip to the next possible prime number
+            while (!is_prime[(prev_prime += 2)/2]) {
+            }
+            std::cout << prev_prime << "\n";
         }
-        std::cout << prev_prime << "\n";
     }
 
     return 0;
