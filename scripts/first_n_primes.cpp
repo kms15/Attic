@@ -38,6 +38,10 @@ int main(int argc, char** argv) {
     // For this version we'll use the sieve of Eratosthenese
     // optimized to consider only odd numbers
     if (num_primes >= 1) {
+        // print the one even prime
+        std::cout << 2 << "\n";
+
+        // use the sieve on the odd numbers only
         std::vector<bool> is_prime(
                 (upper_bound_for_nth_prime(num_primes) + 1)/2,
                 true);
@@ -49,6 +53,7 @@ int main(int argc, char** argv) {
             while (!is_prime[(last_prime += 2)/2]) {
             }
             ++primes_found;
+            std::cout << last_prime << "\n";
 
             // cross off all multiples of that number
             // (skipping the multiples of 2 since they won't be odd)
@@ -56,16 +61,6 @@ int main(int argc, char** argv) {
                     mult += 2*last_prime) {
                 is_prime[mult/2] = false;
             }
-        }
-
-        // drain the sieve
-        std::cout << "2\n";
-        size_t prev_prime = 1;
-        while (prev_prime != last_prime) {
-            // skip to the next possible prime number
-            while (!is_prime[(prev_prime += 2)/2]) {
-            }
-            std::cout << prev_prime << "\n";
         }
     }
 
