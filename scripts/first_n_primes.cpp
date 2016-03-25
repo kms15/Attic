@@ -4,21 +4,15 @@
 
 #include <iostream>
 #include <sstream>
-#include <vector>
-#include <cmath>
+
+#include "primes.h"
 
 void usage() {
     std::cerr << "usage:\n\tfirst_n_primes <n>\n";
 }
 
-typedef unsigned long long uint;
-
-uint upper_bound_for_nth_prime(uint n) {
-    if (n < 6) {
-        return 11;
-    } else {
-        return (uint)(n * (std::log(n) + std::log(std::log(n))));
-    }
+void output_n(size_t n) {
+    std::cout << n << "\n";
 }
 
 int main(int argc, char** argv) {
@@ -35,34 +29,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // For this version we'll use the sieve of Eratosthenese
-    // optimized to consider only odd numbers
-    if (num_primes >= 1) {
-        // print the one even prime
-        std::cout << 2 << "\n";
-
-        // use the sieve on the odd numbers only
-        std::vector<bool> is_prime(
-                (upper_bound_for_nth_prime(num_primes) + 1)/2,
-                true);
-        size_t primes_found = 1;
-        size_t last_prime = 1;
-        is_prime[1/2] = false;
-        while (primes_found < num_primes) {
-            // skip to the next possible prime number
-            while (!is_prime[(last_prime += 2)/2]) {
-            }
-            ++primes_found;
-            std::cout << last_prime << "\n";
-
-            // cross off all multiples of that number
-            // (skipping the multiples of 2 since they won't be odd)
-            for (size_t mult = 3*last_prime; mult/2 < is_prime.size();
-                    mult += 2*last_prime) {
-                is_prime[mult/2] = false;
-            }
-        }
-    }
+    first_n_primes(num_primes, output_n);
 
     return 0;
 }
