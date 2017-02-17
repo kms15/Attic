@@ -6,9 +6,9 @@ flangeWidth = flangeHeight;
 eyepieceCuffHeight = 20;
 clearance = 0.25;
 
-$fn = 60;
+$fn = 100;
 overcut = 0.01;
-adapterDiameter = eyepieceTubeInnerDiameter - 2*clearance;
+adapterDiameter = eyepieceTubeInnerDiameter; // clearance is microscope tube
 adapterHeight = cameraTubeHeight;
 
 difference() {
