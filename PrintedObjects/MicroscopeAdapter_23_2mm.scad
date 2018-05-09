@@ -1,6 +1,6 @@
 cameraTubeOuterDiameter = 14.2;
 cameraTubeHeight = 10;
-eyepieceTubeInnerDiameter = 23;
+eyepieceTubeInnerDiameter = 23.2;
 flangeHeight = 2;
 flangeWidth = flangeHeight;
 eyepieceCuffHeight = 20;
@@ -17,6 +17,6 @@ difference() {
         cylinder(h=flangeHeight, d=adapterDiameter + 2*flangeWidth);
     }
     translate([0,0,-overcut])
-        cylinder(h=adapterHeight + 2*overcut, 
+        cylinder(h=adapterHeight + 2*overcut,
             d=cameraTubeOuterDiameter + 2*clearance);
 }
