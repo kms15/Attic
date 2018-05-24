@@ -9,18 +9,18 @@ def cut_depths(start_depth, stop_depth, rough_cut=0.1, fine_cut=0.02,
         min_transition_cuts=11):
     estimated_transition_cuts = max(min_transition_cuts + 1,
             math.ceil(rough_cut/fine_cut))
-    transition_diameter = stop_depth + 2 * estimated_transition_cuts * fine_cut
+    transition_diameter = stop_depth - 2 * estimated_transition_cuts * fine_cut
 
     depth = start_depth
-    while depth > transition_diameter:
-        depth -= rough_cut
+    while depth < transition_diameter:
+        depth += rough_cut
         yield depth
 
-    transition_cuts = max(0, math.ceil((depth - stop_depth)/(2*fine_cut)))
-    margin = depth - stop_depth - transition_cuts * fine_cut
+    transition_cuts = max(0, math.ceil((stop_depth - depth)/(2*fine_cut)))
+    margin = stop_depth - depth - transition_cuts * fine_cut
     delta_delta_cut = 2 * margin / ((transition_cuts + 1) * transition_cuts)
     for i in range(transition_cuts, 0, -1):
-        depth -= fine_cut + i * delta_delta_cut
+        depth += fine_cut + i * delta_delta_cut
         yield depth
 
 
@@ -32,7 +32,7 @@ def main():
         y1 = 6
         cut_dir = [0, -1]
         d0 = 0
-        d1 = -2
+        d1 = 2
 
         f_cut = 20
         f_move = 150
@@ -42,7 +42,7 @@ def main():
                 for xy in reversed(cut_path)]
 
         for d in cut_depths(d0, d1):
-            next_cut = [[x - c*d for x,c in zip(xy, cut_dir)]
+            next_cut = [[x + c*d for x,c in zip(xy, cut_dir)]
                     for xy in cut_path]
             speed = f_move
             for x,y in next_cut:
