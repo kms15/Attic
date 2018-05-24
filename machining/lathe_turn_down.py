@@ -23,32 +23,33 @@ def cut_depths(start_depth, stop_depth, rough_cut=0.1, fine_cut=0.02,
         depth -= fine_cut + i * delta_delta_cut
         yield depth
 
-# Writes gcode to a file f that will move to the start of a cut at (x0, y0)
-# and speed f_move, cut to (x1, y1) at speed f_cut, then move back by
-# (x_clearance, y_clearance) and move back near the start of the cut (at
-# (x0 + x_clearance, x1 + y_clearance).
-def cut_to(f, x0, y0, x1, y1, x_clearance=0, y_clearance=0.2,
-        f_move=150, f_cut=20):
-    move_clearance = 0.2
-    f_move = 150
-    f_cut = 20
-    f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x0, y0, f_move))
-    f.write("G1 X{0:.4f} Y{1:.4f} F{2}\n".format(x1, y1, f_cut))
-    f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x1 + x_clearance,
-        y1 + y_clearance, f_move))
-    f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x0 + x_clearance,
-        y0 + y_clearance, f_move))
-
 
 def main():
     with open("lathe_turn_down.gcode","w") as f:
         x0 = 0
-        y0 = 6
-        x1 = 30
-        y1 = 4
+        y0 = 4
+        x1 = 2
+        y1 = 6
+        cut_dir = [0, -1]
+        d0 = 0
+        d1 = -2
 
-        for y in cut_depths(y0, y1):
-            cut_to(f, x0, y, x1, y);
+        f_cut = 20
+        f_move = 150
+        cut_path = [[x0, y0], [x1, y1]]
+        clearance = [x * 0.2 for x in cut_dir]
+        move_path = [[x - c for x,c in zip(xy, clearance)]
+                for xy in reversed(cut_path)]
+
+        for d in cut_depths(d0, d1):
+            next_cut = [[x - c*d for x,c in zip(xy, cut_dir)]
+                    for xy in cut_path]
+            speed = f_move
+            for x,y in next_cut:
+                f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x, y, speed))
+                speed = f_cut
+            for x,y in move_path:
+                f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x, y, f_move))
 
 if __name__ == "__main__":
     main()
