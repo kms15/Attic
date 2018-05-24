@@ -24,32 +24,39 @@ def cut_depths(start_depth, stop_depth, rough_cut=0.1, fine_cut=0.02,
         yield depth
 
 
+def gcode_coords(names, values):
+    return " ".join(
+        ["{0}{1:.4f}".format(l,x) for l,x in zip(names, values)]
+    )
+
+
 def main():
     with open("lathe_turn_down.gcode","w") as f:
-        x0 = 0
-        y0 = 4
-        x1 = 2
-        y1 = 6
+        coordinates = ['X', 'Y']
+        cut_path = [[0, 4], [2, 6]]
         cut_dir = [0, -1]
         d0 = 0
         d1 = 2
 
-        f_cut = 20
-        f_move = 150
-        cut_path = [[x0, y0], [x1, y1]]
+        cut_speed = 20
+        move_speed = 150
         clearance = [x * 0.2 for x in cut_dir]
-        move_path = [[x - c for x,c in zip(xy, clearance)]
-                for xy in reversed(cut_path)]
+        move_path = [[x - c for x,c in zip(xs, clearance)]
+                for xs in reversed(cut_path)]
 
         for d in cut_depths(d0, d1):
             next_cut = [[x + c*d for x,c in zip(xy, cut_dir)]
                     for xy in cut_path]
-            speed = f_move
-            for x,y in next_cut:
-                f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x, y, speed))
-                speed = f_cut
-            for x,y in move_path:
-                f.write("G0 X{0:.4f} Y{1:.4f} F{2}\n".format(x, y, f_move))
+            speed = move_speed
+            for xs in next_cut:
+                f.write("G0 {0} F{1}\n".format(
+                    gcode_coords(coordinates, xs), speed)
+                );
+                speed = cut_speed
+            for xs in move_path:
+                f.write("G0 {0} F{1}\n".format(
+                    gcode_coords(coordinates, xs), move_speed)
+                );
 
 if __name__ == "__main__":
     main()
