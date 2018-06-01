@@ -32,14 +32,17 @@ def gcode_coords(names, values):
 
 def main():
     with open("lathe_turn_down.gcode","w") as f:
-        coordinates = ['X', 'Y']
-        cut_path = [[0, 4], [2, 6]]
-        cut_dir = [0, -1]
-        d0 = 0
-        d1 = 2
+        coordinates = ['X', 'Y', 'A']
+        pitch = 1.25
+        cut_path = [[0, 4, 0], [27 - pitch, 4, -27/pitch + 1], [27, 5, -27/pitch]]
+        theta = math.pi/6
+        cut_dir = [-math.sin(theta), -math.cos(theta), 0]
+        d0 = 1.15
+        d1 = 1.25
+        #f.write("M92 A3200\n")
 
         cut_speed = 20
-        move_speed = 150
+        move_speed = 50
         clearance = [x * 0.2 for x in cut_dir]
         move_path = [[x - c for x,c in zip(xs, clearance)]
                 for xs in reversed(cut_path)]
