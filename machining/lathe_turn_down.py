@@ -5,7 +5,7 @@ import math
 # stop depth, starting with rough_cut depth cuts and gradual transitioning
 # to fine_cut depth cuts near the end (with a minimum of min_transition_cuts
 # of somewhat finer cuts near the end).
-def cut_depths(start_depth, stop_depth, rough_cut=0.1, fine_cut=0.02,
+def cut_depths(start_depth, stop_depth, rough_cut=3, fine_cut=0.125,
         min_transition_cuts=11):
     estimated_transition_cuts = max(min_transition_cuts + 1,
             math.ceil(rough_cut/fine_cut))
@@ -32,17 +32,16 @@ def gcode_coords(names, values):
 
 def main():
     with open("lathe_turn_down.gcode","w") as f:
-        coordinates = ['X', 'Y', 'A']
+        coordinates = ['X', 'Z', 'A']
         pitch = 1.25
-        cut_path = [[0, 4, 0], [27 - pitch, 4, -27/pitch + 1], [27, 5, -27/pitch]]
-        theta = math.pi/6
-        cut_dir = [-math.sin(theta), -math.cos(theta), 0]
-        d0 = 1.15
-        d1 = 1.25
+        cut_path = [[75, 4, 0], [60, 0, -360], [15, 0, -360*4], [0, 4, -360*5]]
+        cut_dir = [0, -1, 0]
+        d0 = 0
+        d1 = 4
         #f.write("M92 A3200\n")
 
-        cut_speed = 20
-        move_speed = 50
+        cut_speed = 50
+        move_speed = 100
         clearance = [x * 0.2 for x in cut_dir]
         move_path = [[x - c for x,c in zip(xs, clearance)]
                 for xs in reversed(cut_path)]

@@ -1,5 +1,5 @@
 $fn=60;
-waterblockDim=[41,41,12];
+waterblockDim=[41,41,12+1];
 wallThickness=5;
 curvature=3;
 insertDiam=6.4;
