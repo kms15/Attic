@@ -4,7 +4,7 @@ wallThickness=5;
 curvature=3;
 insertDiam=6.4;
 insertHeight=10;
-m5HoleDiam=5.3;
+m5HoleDiam=5.8;
 m5CountersinkDiam=10.3;
 pillarDiam=insertDiam + 2*wallThickness;
 
