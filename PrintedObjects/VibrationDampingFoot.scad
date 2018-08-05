@@ -3,7 +3,7 @@
 use <MCAD/regular_shapes.scad>
 $fn = 120;
 
-footDiameter = 32;
+footRadius = 32/2;
 sorbothaneThickness = 12.7;
 radialClearance = 6;
 heightClearance = 3;
@@ -12,12 +12,12 @@ floorThickness = wallThickness;
 
 difference () {
     union () {
-        cylinder(r=footDiameter + 2*radialClearance + 2*wallThickness, 
+        cylinder(r=footRadius + radialClearance + wallThickness,
             h=wallThickness + 2*sorbothaneThickness + heightClearance);
         translate ([0, 0, wallThickness + 2*sorbothaneThickness + heightClearance])
-            torus(footDiameter + 2*radialClearance + 2*wallThickness, 
-                footDiameter + 2*radialClearance);
+            torus(footRadius + radialClearance + wallThickness,
+                footRadius + radialClearance);
     }
     translate ([0, 0, wallThickness])
-    cylinder(r=footDiameter + 2*radialClearance, h=2*sorbothaneThickness + heightClearance + 1);
+    cylinder(r=footRadius + radialClearance, h=2*sorbothaneThickness + heightClearance + 1);
 }
