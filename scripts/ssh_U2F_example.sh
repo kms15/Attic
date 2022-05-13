@@ -51,9 +51,53 @@ cat $SSH_AUTHORIZED_KEYS_FILE
 cat << EOF
 
 ------------------------------------------------------------------------------
+Example of creating and signing an ephemeral key
+------------------------------------------------------------------------------
+Rather than using a touchless SSH key to avoid having to physically touch the
+key every time you want to log-in, in many cases you can instead create a new
+key with a finite lifespan and sign this key with your trusted key.  You would
+only need to touch the physical key when you want to sign a new key (maybe
+once every few hours or once a day), and could easily unplug the physical key
+and put it back in your pocket between signings.
+
+EOF
+EPHEMERAL_KEY_FILE=$(pwd)/my-ephemeral-ssh-key
+LIFESPAN=-1m:+1h30m # valid from one minute ago to 90 minutes in the future
+# generate the key
+ssh-keygen -t ed25519 -f $EPHEMERAL_KEY_FILE -N ""
+# sign the key
+ssh-keygen -s $KEY_FILE -I "my_ephemeral_key" -n $USER -V $LIFESPAN \
+    $EPHEMERAL_KEY_FILE
+# dump the resulting certificate to stdout for educational purposes
+ssh-keygen -L -f $EPHEMERAL_KEY_FILE-cert.pub
+
+
+cat << EOF
+
+------------------------------------------------------------------------------
+Example of an authorized_keys entry for a signed (ephemeral) key/certificate
+------------------------------------------------------------------------------
+Enabling signed keys in .ssh/authorized_keys is easy - just add a
+"cert-authority" option in front of the trusted key that's allowed to sign
+temporary keys. In this example we also add the "principals" option to
+restrict logins to keys that were signed with the "-n" option for one of the
+given principles. This might typically be used in a case where one master key
+could sign the keys of multiple users, but you'd want to restrict the key to
+a given user at the time of signing.
+
+EOF
+SSH_AUTHORIZED_KEYS_FILE=authorized_keys.certificate_example
+printf 'cert-authority,principals="$USER" ' >> $SSH_AUTHORIZED_KEYS_FILE
+cat $KEY_FILE.pub >> $SSH_AUTHORIZED_KEYS_FILE
+cat $SSH_AUTHORIZED_KEYS_FILE
+
+
+cat << EOF
+
+------------------------------------------------------------------------------
 Example of an allowed signers file for ssh signatures
 ------------------------------------------------------------------------------
-Verifying a signature (e.g. of a file or git commit) requires a list of
+Verifying a signature  of a file or git commit requires a list of
 public keys whose signatures we trust. For ssh this takes the form of an
 allowed signers file that we can then reference from the ssh command line
 tools or git.  Here's an example file with a single key (the one we just
