@@ -108,8 +108,8 @@ EOF
 GIT_CONFIG_FILE=$(pwd)/gitconfig
 cat << EOF > $GIT_CONFIG_FILE
 [user]
-  email = primate@example.com
-  name = primate
+  email = ${USER}@example.com
+  name = ${USER}
   signingkey = $KEY_FILE
 [init]
   defaultBranch = main
