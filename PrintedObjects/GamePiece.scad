@@ -1,8 +1,9 @@
-totalWidth = 25.4;
-totalHeight = 12.7;
-totalDepth = 25.4;
-cutoutWidth = 12.7;
-cutoutDepth = 12.7;
+inches = 25.4; // mm
+totalWidth = 0.8 * inches;
+totalHeight = 0.4 * inches;
+totalDepth = 0.8 * inches;
+cutoutWidth = 0.4 * inches;
+cutoutDepth = 0.4 * inches;
 
 overcut = 1;
 
