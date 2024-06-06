@@ -4,10 +4,14 @@ $fn=120;
 aquarium_length=1231;
 aquarium_width=622;
 aquarium_height=640;
-glass_thickness=13; // +/- 1mm
-iron_width=44; 
-iron_depth=34; // 25 + 9
-iron_thickness=8; // +/- 1mm
+glass_thickness=12; // +/- 1mm
+iron_width=44;
+iron_top_width=25;
+iron_top_indent_width=6;
+iron_top_indent_depth=9;
+iron_top_indent_thickness=5;
+iron_top_cross_bar_width=50;
+iron_thickness=6; // +/- 1mm
 pipe_od=33.40;
 pipe_id=26.14;
 elbow_od=40.5;
@@ -34,6 +38,10 @@ camlock_male_part_id=22.2; // guess
 camlock_male_part_length=34.9; // guess
 camlock_clearance=1; // guess
 
+valve_pipe_length=80;
+
+npt_reducer_elbow_overlap=10;
+
 pvc_color=[0.9, 0.9, 0.9];
 camlock_color=[0.5, 0.5, 0.5];
 
@@ -43,8 +51,12 @@ module aquarium(
     h=aquarium_height,
     glass_thickness=glass_thickness,
     iron_width=iron_width,
-    iron_depth=iron_depth,
-    iron_thickness=iron_thickness
+    iron_top=iron_top_width,
+    iron_top_indent_width=iron_top_indent_width,
+    iron_top_indent_depth=iron_top_indent_depth,
+    iron_top_indent_thickness=iron_top_indent_thickness,
+    iron_thickness=iron_thickness,
+    iron_top_cross_bar_width=iron_top_cross_bar_width,
     ) {
     // angle irons
     color([0.4, 0.4, 0.4]) difference() {
@@ -53,27 +65,61 @@ module aquarium(
         // cut out sides
         translate([-overcut, -overcut, iron_width])
             cube([
-                l + 2 * overcut, 
+                l + 2 * overcut,
                 w + 2 * overcut,
                 h - 2 * iron_width
-        
+
             ]);
         // cut out inner box
         translate([iron_thickness, iron_thickness, iron_thickness])
             cube([
-                l - 2 * iron_thickness, 
+                l - 2 * iron_thickness,
                 w - 2 * iron_thickness,
-                h - 2 * iron_thickness
+                h - iron_thickness - iron_top_indent_depth - iron_top_indent_thickness
             ]);
         // cut out top and bottom
-        translate([iron_depth, iron_depth, -overcut])
+/*        translate([
+            iron_top_width + iron_top_indent_width,
+            iron_top_width + iron_top_indent_width,
+            -overcut
+            ])
             cube([
-                l - 2 * iron_depth, 
-                w - 2 * iron_depth,
+                l - 2 * iron_top_width - 2 * iron_top_indent_width,
+                w - 2 * iron_top_width - 2 * iron_top_indent_width,
                 h + 2 * overcut
             ]);
-    }
-  
+*/
+        // cut out top and bottom on the right side
+        translate([
+            iron_top_width + iron_top_indent_width,
+            iron_top_width + iron_top_indent_width,
+            -overcut
+            ])
+            cube([
+                l/2 - iron_top_width - 2 * iron_top_indent_width - iron_top_cross_bar_width/2,
+                w - 2 * iron_top_width - 2 * iron_top_indent_width,
+                h + 2 * overcut
+            ]);
+        // cut out top and bottom on the left side
+        translate([
+            l/2 + iron_top_cross_bar_width/2 + iron_top_indent_width,
+            iron_top_width + iron_top_indent_width,
+            -overcut
+            ])
+            cube([
+                l/2 - iron_top_width - 2 * iron_top_indent_width - iron_top_cross_bar_width/2,
+                w - 2 * iron_top_width - 2 * iron_top_indent_width,
+                h + 2 * overcut
+            ]);
+        // cut out the top indent
+        translate([iron_top_width, iron_top_width, aquarium_height - iron_top_indent_depth])
+            cube([
+                l - 2 * iron_top_width,
+                w - 2 * iron_top_width,
+                iron_top_indent_depth + overcut
+            ]);
+   }
+
     // water
     color([0, 0.7, 1, 0.1])
     translate([iron_thickness + glass_thickness, iron_thickness + glass_thickness, iron_thickness + glass_thickness])
@@ -86,7 +132,7 @@ module aquarium(
         cube([l - 2 * iron_thickness, w - 2 * iron_thickness, h - 2 * iron_thickness]);
         translate([glass_thickness, glass_thickness, glass_thickness])
             cube([
-                l - 2 * glass_thickness - 2 * iron_thickness, 
+                l - 2 * glass_thickness - 2 * iron_thickness,
                 w - 2 * glass_thickness - 2 * iron_thickness,
                 h - glass_thickness + overcut - 2 * iron_thickness
             ]);
@@ -104,8 +150,8 @@ module pipe(l, od=pipe_od, id=pipe_id, col=pvc_color) {
     }
 }
 
-module elbow(l=elbow_overlap,  od=elbow_od, id=pipe_od) {
-    color(pvc_color)
+module elbow(l=elbow_overlap,  od=elbow_od, id=pipe_od, col=pvc_color) {
+    color(col)
     difference() {
         union() {
             sphere(od/2);
@@ -177,23 +223,6 @@ module npt_adapter(
     }
 }
 
-/*
-camlock_female_npt_overlap=17.3; // guess
-camlock_female_npt_length=78.6; // guess
-camlock_female_npt_wide_length=46.0; // guess
-camlock_female_npt_wide_od=61.9; // guess
-
-camlock_male_npt_overlap=17.3; // guess
-camlock_male_npt_length=78.6; // guess
-camlock_male_npt_hex_length=46.0; // guess
-camlock_male_npt_hex_od=50; // guess
-
-camlock_male_part_od=36.5; // guess
-camlock_male_part_id=22.2; // guess
-camlock_male_part_length=34.9; // guess
-camlock_clearance=1; // guess
-*/
-
 module camlock_female_npt(
     l=camlock_female_npt_length,
     id=camlock_male_part_id,
@@ -215,7 +244,7 @@ module camlock_female_npt(
             cube([socket_od/8, socket_od/8, socket_outer_length]);
         color([0.8, 0.8, 0.8])
         translate([socket_od/2 - socket_od/16, -socket_od/16, l - socket_outer_length - socket_od/8])
-            cube([socket_od/8, socket_od/8, socket_outer_length]);    
+            cube([socket_od/8, socket_od/8, socket_outer_length]);
     }
 }
 
@@ -234,13 +263,13 @@ module camlock_male_npt(
             pipe(l=hex_length, od=hex_od, id=npt_od, $fn=6, col=camlock_color);
         translate([0,0, l - male_part_length - overcut])
             pipe(l=male_part_length, od=male_part_od, id=id, col=camlock_color);
-    }    
+    }
 }
 
 module valve(
     valve_pipe_od=45,
     valve_pipe_id=pipe_od,
-    valve_pipe_length=80,
+    valve_pipe_length=valve_pipe_length,
     valve_stem_diameter=30,
     valve_stem_length=10,
     valve_box_length=54,
@@ -257,25 +286,46 @@ module valve(
         rotate([0,90,0])
         translate([0, 0, valve_pipe_id/2])
         color(pipe_color)
-        cylinder(h=valve_stem_length + valve_pipe_od/2 - valve_pipe_id/2, d=valve_stem_diameter); 
+        cylinder(h=valve_stem_length + valve_pipe_od/2 - valve_pipe_id/2, d=valve_stem_diameter);
     }
-    
+
     color(box_color)
     translate([valve_pipe_od/2 + valve_stem_length, valve_box_y_offset,
         valve_pipe_length/2 + valve_box_z_offset])
-        cube([valve_box_length, valve_box_width, valve_box_height]);    
+        cube([valve_box_length, valve_box_width, valve_box_height]);
 }
 
+module npt_reducer_elbow(
+    ntp_length=22,
+    npt_od=pipe_od,
+    hex_od=43,
+    hex_length=9,
+    elbow_od=18,
+    elbow_id=12,
+    elbow_length=50 - 12/2,
+) {
+    union() {
+        pipe(l=ntp_length + hex_length, od=npt_od, id=elbow_id, col=camlock_color);
+        translate([0,0, ntp_length])
+            pipe(l=hex_length, od=hex_od, id=npt_od, $fn=6, col=camlock_color);
+        translate([0,0, elbow_length])
+            rotate([0, 90, 0])
+            elbow(l=elbow_length,  od=elbow_od, id=elbow_id, col=camlock_color);
+    }
+}
+
+
 //translate([-100,-100,0])
-//valve();
+//npt_elbow();
 
 module siphon(
-    inside_overhang = aquarium_height - 60,
+    inside_overhang = aquarium_height - 75,
     outside_overhang = 200,
     siphon_offset = 60,
-    siphon_height = 40,
+    siphon_height = 55,
     u_width = 100,
     fitting_clearance=3,
+    echo_lengths=0,
     ) {
     // intake
     translate([siphon_offset, siphon_offset, aquarium_height - inside_overhang + pipe_od/2 + elbow_overlap])
@@ -283,87 +333,113 @@ module siphon(
         fourway();
 
     // ascending pipe
+    ascending_pipe_l = inside_overhang - elbow_overlap - pipe_od + siphon_height - pipe_od/2;
     translate([siphon_offset, siphon_offset, aquarium_height - inside_overhang + pipe_od + elbow_overlap])
-        pipe(inside_overhang - elbow_overlap - pipe_od + siphon_height - pipe_od/2);
-    
+        pipe(ascending_pipe_l);
+
     // top tee
     translate([siphon_offset, siphon_offset, aquarium_height + siphon_height])
         rotate([180, 0, 90])
         tee();
 
     // top water pipe
+    top_water_pipe_length = u_width - pipe_od;
     translate([siphon_offset, siphon_offset - pipe_od/2, aquarium_height + siphon_height])
         rotate([90, 0, 0])
-        pipe(u_width - pipe_od);
+        pipe(top_water_pipe_length);
 
     // water elbow down
     translate([siphon_offset, siphon_offset - u_width, aquarium_height + siphon_height])
         rotate([0, 90, 90])
         elbow();
 
-    // water outflow pipe
-    translate([siphon_offset, siphon_offset - u_width, 
+    // descending water pipe
+    descending_water_pipe_length = outside_overhang + siphon_height - pipe_od/2
+            - npt_adapter_length + npt_adapter_overlap
+            - camlock_female_npt_length + camlock_female_npt_overlap;
+    translate([siphon_offset, siphon_offset - u_width,
             aquarium_height - outside_overhang
                 + npt_adapter_length - npt_adapter_overlap
                 + camlock_female_npt_length - camlock_female_npt_overlap])
-        pipe(outside_overhang + siphon_height - pipe_od/2
-            - npt_adapter_length + npt_adapter_overlap
-            - camlock_female_npt_length + camlock_female_npt_overlap);
-   
+        pipe(descending_water_pipe_length);
+
     // water outflow adapter
     translate([siphon_offset, siphon_offset - u_width, aquarium_height - outside_overhang + camlock_female_npt_length - camlock_female_npt_overlap])
         npt_adapter();
-        
+
     // water outflow clamlock socket
     translate([siphon_offset, siphon_offset - u_width, aquarium_height - outside_overhang + camlock_female_npt_length])
         rotate([180,0,0])
         camlock_female_npt();
-   
+
     // top air pipe
+    top_air_pipe_length = elbow_overlap + npt_adapter_overlap + fitting_clearance;
     translate([siphon_offset, siphon_offset + pipe_od/2, aquarium_height + siphon_height])
         rotate([-90,0,0])
-        pipe(elbow_overlap + npt_adapter_overlap + fitting_clearance);
+        pipe(top_air_pipe_length);
 
     // top air adapter
     translate([siphon_offset, siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance, aquarium_height + siphon_height])
         rotate([-90,0,0])
         npt_adapter();
-        
+
     // top air camlock socket
     translate([siphon_offset, siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance + npt_adapter_length - camlock_female_npt_overlap, aquarium_height + siphon_height])
         rotate([-90,0,0])
         camlock_female_npt();
-        
+
     // top air camlock plug
     translate([
-            siphon_offset, 
-            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance 
+            siphon_offset,
+            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance
                 + npt_adapter_length - camlock_female_npt_overlap
                 + camlock_female_npt_length + camlock_male_npt_length
-                - camlock_male_part_length + camlock_clearance, 
+                - camlock_male_part_length + camlock_clearance,
             aquarium_height + siphon_height
         ])
         rotate([90,0,0])
         camlock_male_npt();
-        
+
     // siphon-break valve
     translate([
-            siphon_offset, 
-            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance 
+            siphon_offset,
+            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance
                 + npt_adapter_length - camlock_female_npt_overlap
                 + camlock_female_npt_length + camlock_male_npt_length
                 - camlock_male_part_length + camlock_clearance
-                - camlock_male_npt_overlap, 
+                - camlock_male_npt_overlap,
             aquarium_height + siphon_height
         ])
         rotate([-90,-90,0])
-        valve();    
+        valve();
+
+
+    // siphon-break overflow
+    translate([
+            siphon_offset,
+            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance
+                + npt_adapter_length - camlock_female_npt_overlap
+                + camlock_female_npt_length + camlock_male_npt_length
+                - camlock_male_part_length + camlock_clearance
+                - camlock_male_npt_overlap
+                + valve_pipe_length - npt_reducer_elbow_overlap,
+            aquarium_height + siphon_height
+        ])
+        rotate([-90,90,0])
+        npt_reducer_elbow();
+
+    if (echo_lengths > 0) {
+        echo("Ascending pipe length:", ascending_pipe_l, "mm");
+        echo("Top water pipe length:", top_water_pipe_length, "mm");
+        echo("Descending water pipe length: ", descending_water_pipe_length, "mm")
+        echo("Top air pipe length:", top_air_pipe_length, "mm");
+    }
 }
 
 siphon();
 
 translate([aquarium_length,0,0])
 mirror([1,0,0])
-siphon();
+siphon(echo_lengths=1);
 
 aquarium();
