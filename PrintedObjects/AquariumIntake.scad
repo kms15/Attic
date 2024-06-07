@@ -1,46 +1,8 @@
+include <AquariumIntakeDimensions.scad>
+use <AquariumIntakeHolder.scad>
+
 overcut=1;
 $fn=120;
-
-aquarium_length=1231;
-aquarium_width=622;
-aquarium_height=640;
-glass_thickness=12; // +/- 1mm
-iron_width=44;
-iron_top_width=25;
-iron_top_indent_width=6;
-iron_top_indent_depth=9;
-iron_top_indent_thickness=5;
-iron_top_cross_bar_width=50;
-iron_thickness=6; // +/- 1mm
-pipe_od=33.40;
-pipe_id=26.14;
-elbow_od=40.5;
-elbow_overlap=27.5;
-
-npt_adapter_length=47;
-npt_adapter_od=40;
-npt_adapter_overlap=22;
-npt_adapter_hex_diameter=50;  // guess
-npt_adapter_hex_length=5; // guess
-
-camlock_female_npt_overlap=17.3; // guess
-camlock_female_npt_length=78.6; // guess
-camlock_female_npt_wide_length=46.0; // guess
-camlock_female_npt_wide_od=61.9; // guess
-
-camlock_male_npt_overlap=17.3; // guess
-camlock_male_npt_length=78.6; // guess
-camlock_male_npt_hex_length=14.3; // guess
-camlock_male_npt_hex_od=50; // guess
-
-camlock_male_part_od=36.5; // guess
-camlock_male_part_id=22.2; // guess
-camlock_male_part_length=34.9; // guess
-camlock_clearance=1; // guess
-
-valve_pipe_length=80;
-
-npt_reducer_elbow_overlap=10;
 
 pvc_color=[0.9, 0.9, 0.9];
 camlock_color=[0.5, 0.5, 0.5];
@@ -321,35 +283,36 @@ module npt_reducer_elbow(
 module siphon(
     inside_overhang = aquarium_height - 75,
     outside_overhang = 200,
-    siphon_offset = 60,
+    siphon_offset_x = 70,
+    siphon_offset_y = 60,
     siphon_height = 55,
     u_width = 100,
     fitting_clearance=3,
     echo_lengths=0,
     ) {
     // intake
-    translate([siphon_offset, siphon_offset, aquarium_height - inside_overhang + pipe_od/2 + elbow_overlap])
+    translate([siphon_offset_x, siphon_offset_y, aquarium_height - inside_overhang + pipe_od/2 + elbow_overlap])
         rotate([90,90,180])
         fourway();
 
     // ascending pipe
     ascending_pipe_l = inside_overhang - elbow_overlap - pipe_od + siphon_height - pipe_od/2;
-    translate([siphon_offset, siphon_offset, aquarium_height - inside_overhang + pipe_od + elbow_overlap])
+    translate([siphon_offset_x, siphon_offset_y, aquarium_height - inside_overhang + pipe_od + elbow_overlap])
         pipe(ascending_pipe_l);
 
     // top tee
-    translate([siphon_offset, siphon_offset, aquarium_height + siphon_height])
+    translate([siphon_offset_x, siphon_offset_y, aquarium_height + siphon_height])
         rotate([180, 0, 90])
         tee();
 
     // top water pipe
     top_water_pipe_length = u_width - pipe_od;
-    translate([siphon_offset, siphon_offset - pipe_od/2, aquarium_height + siphon_height])
+    translate([siphon_offset_x, siphon_offset_y - pipe_od/2, aquarium_height + siphon_height])
         rotate([90, 0, 0])
         pipe(top_water_pipe_length);
 
     // water elbow down
-    translate([siphon_offset, siphon_offset - u_width, aquarium_height + siphon_height])
+    translate([siphon_offset_x, siphon_offset_y - u_width, aquarium_height + siphon_height])
         rotate([0, 90, 90])
         elbow();
 
@@ -357,41 +320,41 @@ module siphon(
     descending_water_pipe_length = outside_overhang + siphon_height - pipe_od/2
             - npt_adapter_length + npt_adapter_overlap
             - camlock_female_npt_length + camlock_female_npt_overlap;
-    translate([siphon_offset, siphon_offset - u_width,
+    translate([siphon_offset_x, siphon_offset_y - u_width,
             aquarium_height - outside_overhang
                 + npt_adapter_length - npt_adapter_overlap
                 + camlock_female_npt_length - camlock_female_npt_overlap])
         pipe(descending_water_pipe_length);
 
     // water outflow adapter
-    translate([siphon_offset, siphon_offset - u_width, aquarium_height - outside_overhang + camlock_female_npt_length - camlock_female_npt_overlap])
+    translate([siphon_offset_x, siphon_offset_y - u_width, aquarium_height - outside_overhang + camlock_female_npt_length - camlock_female_npt_overlap])
         npt_adapter();
 
     // water outflow clamlock socket
-    translate([siphon_offset, siphon_offset - u_width, aquarium_height - outside_overhang + camlock_female_npt_length])
+    translate([siphon_offset_x, siphon_offset_y - u_width, aquarium_height - outside_overhang + camlock_female_npt_length])
         rotate([180,0,0])
         camlock_female_npt();
 
     // top air pipe
     top_air_pipe_length = elbow_overlap + npt_adapter_overlap + fitting_clearance;
-    translate([siphon_offset, siphon_offset + pipe_od/2, aquarium_height + siphon_height])
+    translate([siphon_offset_x, siphon_offset_y + pipe_od/2, aquarium_height + siphon_height])
         rotate([-90,0,0])
         pipe(top_air_pipe_length);
 
     // top air adapter
-    translate([siphon_offset, siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance, aquarium_height + siphon_height])
+    translate([siphon_offset_x, siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance, aquarium_height + siphon_height])
         rotate([-90,0,0])
         npt_adapter();
 
     // top air camlock socket
-    translate([siphon_offset, siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance + npt_adapter_length - camlock_female_npt_overlap, aquarium_height + siphon_height])
+    translate([siphon_offset_x, siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance + npt_adapter_length - camlock_female_npt_overlap, aquarium_height + siphon_height])
         rotate([-90,0,0])
         camlock_female_npt();
 
     // top air camlock plug
     translate([
-            siphon_offset,
-            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance
+            siphon_offset_x,
+            siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance
                 + npt_adapter_length - camlock_female_npt_overlap
                 + camlock_female_npt_length + camlock_male_npt_length
                 - camlock_male_part_length + camlock_clearance,
@@ -402,8 +365,8 @@ module siphon(
 
     // siphon-break valve
     translate([
-            siphon_offset,
-            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance
+            siphon_offset_x,
+            siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance
                 + npt_adapter_length - camlock_female_npt_overlap
                 + camlock_female_npt_length + camlock_male_npt_length
                 - camlock_male_part_length + camlock_clearance
@@ -416,8 +379,8 @@ module siphon(
 
     // siphon-break overflow
     translate([
-            siphon_offset,
-            siphon_offset + pipe_od/2 + elbow_overlap + fitting_clearance
+            siphon_offset_x,
+            siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance
                 + npt_adapter_length - camlock_female_npt_overlap
                 + camlock_female_npt_length + camlock_male_npt_length
                 - camlock_male_part_length + camlock_clearance
@@ -435,6 +398,8 @@ module siphon(
         echo("Top air pipe length:", top_air_pipe_length, "mm");
     }
 }
+
+aquarium_intake_clamp();
 
 siphon();
 
