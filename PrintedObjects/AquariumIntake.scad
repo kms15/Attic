@@ -14,7 +14,8 @@ module aquarium(
     glass_thickness=glass_thickness,
     iron_width=iron_width,
     iron_top=iron_top_width,
-    iron_top_indent_width=iron_top_indent_width,
+    iron_top_side_indent_width=iron_top_side_indent_width,
+    iron_top_back_indent_width=iron_top_back_indent_width,
     iron_top_indent_depth=iron_top_indent_depth,
     iron_top_indent_thickness=iron_top_indent_thickness,
     iron_thickness=iron_thickness,
@@ -39,38 +40,26 @@ module aquarium(
                 w - 2 * iron_thickness,
                 h - iron_thickness - iron_top_indent_depth - iron_top_indent_thickness
             ]);
-        // cut out top and bottom
-/*        translate([
-            iron_top_width + iron_top_indent_width,
-            iron_top_width + iron_top_indent_width,
-            -overcut
-            ])
-            cube([
-                l - 2 * iron_top_width - 2 * iron_top_indent_width,
-                w - 2 * iron_top_width - 2 * iron_top_indent_width,
-                h + 2 * overcut
-            ]);
-*/
         // cut out top and bottom on the right side
         translate([
-            iron_top_width + iron_top_indent_width,
-            iron_top_width + iron_top_indent_width,
+            iron_top_width + iron_top_side_indent_width,
+            iron_top_width + iron_top_back_indent_width,
             -overcut
             ])
             cube([
-                l/2 - iron_top_width - 2 * iron_top_indent_width - iron_top_cross_bar_width/2,
-                w - 2 * iron_top_width - 2 * iron_top_indent_width,
+                l/2 - iron_top_width - 2 * iron_top_side_indent_width - iron_top_cross_bar_width/2,
+                w - 2 * iron_top_width - 2 * iron_top_back_indent_width,
                 h + 2 * overcut
             ]);
         // cut out top and bottom on the left side
         translate([
-            l/2 + iron_top_cross_bar_width/2 + iron_top_indent_width,
-            iron_top_width + iron_top_indent_width,
+            l/2 + iron_top_cross_bar_width/2 + iron_top_side_indent_width,
+            iron_top_width + iron_top_back_indent_width,
             -overcut
             ])
             cube([
-                l/2 - iron_top_width - 2 * iron_top_indent_width - iron_top_cross_bar_width/2,
-                w - 2 * iron_top_width - 2 * iron_top_indent_width,
+                l/2 - iron_top_width - 2 * iron_top_side_indent_width - iron_top_cross_bar_width/2,
+                w - 2 * iron_top_width - 2 * iron_top_back_indent_width,
                 h + 2 * overcut
             ]);
         // cut out the top indent
@@ -399,6 +388,7 @@ module siphon(
     }
 }
 
+#translate([0,0,aquarium_height])
 aquarium_intake_clamp();
 
 siphon();
