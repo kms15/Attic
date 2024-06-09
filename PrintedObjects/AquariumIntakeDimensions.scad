@@ -1,3 +1,7 @@
+overcut = 1;
+default_thickness = 5;
+default_bevel = 2;
+
 aquarium_length=1231;
 aquarium_width=622;
 aquarium_height=640;
@@ -13,7 +17,7 @@ iron_thickness=6; // +/- 1mm
 pipe_od=33.40;
 pipe_id=26.14;
 elbow_od=40.5;
-elbow_overlap=27.5;
+elbow_overlap=22.0;
 
 npt_adapter_length=47;
 npt_adapter_od=40;
@@ -22,9 +26,9 @@ npt_adapter_hex_diameter=50;  // guess
 npt_adapter_hex_length=5; // guess
 
 camlock_female_npt_overlap=17.3; // guess
-camlock_female_npt_length=78.6; // guess
-camlock_female_npt_wide_length=46.0; // guess
-camlock_female_npt_wide_od=61.9; // guess
+camlock_female_npt_length=61; // guess
+camlock_female_npt_wide_length=41.4; // guess
+camlock_female_npt_wide_od=50;
 
 camlock_male_npt_overlap=17.3; // guess
 camlock_male_npt_length=78.6; // guess
@@ -40,6 +44,6 @@ valve_pipe_length=80;
 
 npt_reducer_elbow_overlap=10;
 
-overcut = 1;
-default_thickness = 5;
-default_bevel = 2;
+siphon_offset_x = elbow_od/2 + iron_top_width + iron_top_side_indent_width + 2*default_thickness;
+siphon_offset_y = 61;
+siphon_offset_z = 40;
