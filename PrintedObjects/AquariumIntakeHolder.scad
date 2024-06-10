@@ -1,5 +1,92 @@
 include <AquariumIntakeDimensions.scad>
 
+module fastener_hole(
+    hole_diameter=3.2,
+    hole_depth=6,
+    front_clearance=20,
+    rear_clearance=20,
+    front_counterbore_diameter=6.4,
+    rear_counterbore_diameter=6.4,
+) {
+    // screw hole
+    rotate([0,90,0])
+    translate([0,0,-hole_depth/2 - overcut])
+    cylinder(h=hole_depth + 2*overcut, d=hole_diameter, $fn=30);
+    
+    // head countersink
+    rotate([0,90,0])
+    translate([0,0,hole_depth/2])
+    cylinder(h=front_clearance, d=front_counterbore_diameter, $fn=30);
+    
+    // nut countersink
+    rotate([0,-90,0])
+    translate([0,0,hole_depth/2])
+    rotate([0,0,30])
+    cylinder(h=rear_clearance, d=rear_counterbore_diameter, $fn=6);
+}
+
+module fastener_block(
+    support_thickness=3,
+    od = 10,
+    hole_height=3.5,
+    brace_angle=45,
+) {
+    difference() {
+        union() {
+            // front disk
+            translate([-overcut,0,hole_height])
+            rotate([0, 90, 0])
+            cylinder(d=od, h=support_thickness+overcut);
+            
+            // front box
+            translate([-overcut,-od/2,-overcut])
+            cube([support_thickness+overcut, od, hole_height + overcut]);
+            
+            // sphere body
+            translate([support_thickness,0,hole_height])
+            sphere(d=od);
+            
+            // support brace
+            translate([support_thickness,0,hole_height])
+            rotate([0, 90+brace_angle, 0])
+            cylinder(d=od, h=(hole_height + od/2)/sin(brace_angle));
+            
+            // support box
+            translate([support_thickness,-od/2,hole_height])
+            rotate([0,brace_angle,0])
+            translate([0,0,-hole_height - overcut])
+            cube([(hole_height + od/2)/sin(brace_angle), od, hole_height + overcut]);    
+        }
+        
+        // trim the front (x < 0)
+        translate([
+            -(hole_height + od/2 + 2*overcut),
+            -(od/2 + overcut),
+            -(od/2 - hole_height + 2*overcut)
+        ])
+        cube([
+            hole_height + od/2 + 2*overcut,
+            od + 2*overcut,
+            od + hole_height + 2*overcut
+        ]);
+        
+        // trim the bottom (z < 0)
+        translate([
+            -overcut,
+            -(od/2 + overcut),
+            -((hole_height + od/2)/sin(brace_angle)
+                + (hole_height + od/2)/cos(brace_angle) + overcut)
+        ])
+        cube([
+            (hole_height + od/2)/sin(brace_angle)
+                + (hole_height + od/2)/cos(brace_angle) + 2*overcut,
+            od + 2*overcut,
+            (hole_height + od/2)/sin(brace_angle)
+                + (hole_height + od/2)/cos(brace_angle) + overcut,
+        ]);
+    }
+}
+
 module edge_clip(
     dx = 125,
     dy = iron_top_width + iron_top_side_indent_width + default_thickness,
@@ -505,19 +592,123 @@ module right_edge_clip() {
             ])
             rotate([0,0,180])
             fastener_hole(hole_depth=11);
+        
+        // front left fastener hole
+        translate([
+            iron_top_width + iron_top_side_indent_width + default_thickness,
+            50 + iron_top_width
+                    + iron_top_side_indent_width + default_thickness,
+            - iron_top_indent_depth/2
+        ])
+        rotate([0,0,180])
+        fastener_hole(hole_depth=9);
+    }
+    
+    // bottom back fastener block
+    translate([
+        iron_top_width + iron_top_side_indent_width + default_thickness,
+        iron_thickness + glass_thickness + 14,
+        -iron_top_indent_depth - iron_top_indent_thickness - default_thickness
+    ]) {
+        difference() {
+            rotate([180,0,180])
+            fastener_block($fn=60, hole_height=3.2);
+
+            translate([0,0,-3.2])
+            rotate([0,0,180])
+            fastener_hole();
+        }
+    }
+    
+    // back toggle attachment block
+    translate([
+        iron_top_width + iron_top_side_indent_width + default_thickness - 10,
+        0,
+        default_bevel
+    ])
+    rotate([0,0,90])
+    difference() {
+            fastener_block(
+                od=20,
+                hole_height=10 - default_bevel,
+                support_thickness=5,
+                $fn=60
+            );
+        translate([0, 0, 10 - default_bevel])
+            rotate([0,0,180])
+            fastener_hole(hole_depth=30);
+    }   
+    // right toggle attachment block
+    translate([
+        0,
+        75,
+        default_bevel
+    ])
+    difference() {
+        fastener_block(
+            od=20,
+            hole_height=10 - default_bevel,
+            support_thickness=5,
+            $fn=60
+        );
+        translate([0, 0, 10 - default_bevel])
+            rotate([0,0,180])
+            fastener_hole(hole_depth=30);
     }
 }
 
 module back_edge_clip() {
-    translate([85,0,0])
-    mirror([1,0,0])
-    edge_clip(dx=85, corner_distance=125, back_bevels=0, mask_left_back_bevels=40);
 
-    translate([0, iron_top_width + iron_top_side_indent_width + default_thickness, 
-            -(iron_top_indent_thickness + iron_top_indent_depth + default_thickness),
-    ])
-    cube([default_thickness, 60,
-        iron_top_indent_thickness + iron_top_indent_depth + 2*default_thickness]);
+    difference() {
+        union() {
+            // back clip
+            translate([85,0,0])
+            mirror([1,0,0])
+            edge_clip(dx=85, corner_distance=125, back_bevels=0, mask_left_back_bevels=40);
+
+            // right side plate
+            translate([0, iron_top_width + iron_top_side_indent_width + default_thickness, 
+                    -(iron_top_indent_thickness + iron_top_indent_depth + default_thickness),
+            ])
+            cube([default_thickness, 60,
+                iron_top_indent_thickness + iron_top_indent_depth + 2*default_thickness]);
+
+            // back right fastener block
+            translate([
+                0,
+                iron_thickness + glass_thickness + 14,
+                -iron_top_indent_depth - iron_top_indent_thickness - default_thickness
+            ])
+            rotate([180,0,0])
+            fastener_block($fn=60, hole_height=3.2);
+
+/*
+            translate([0,0,-3.2])
+            rotate([0,0,180])
+            fastener_hole();
+        }
+    }*/
+        }
+
+        // front right fastener hole
+        translate([
+            0,
+            50 + iron_top_width
+                    + iron_top_side_indent_width + default_thickness,
+            - iron_top_indent_depth/2
+        ])
+        rotate([0,0,180])
+        fastener_hole();
+
+        // back right fastener hole
+        translate([
+            0,
+            iron_thickness + glass_thickness + 14,
+            -iron_top_indent_depth - iron_top_indent_thickness - default_thickness - 3.2
+        ])
+        rotate([0,0,180])
+        fastener_hole();
+    }
 }
 
 module aquarium_intake_clamp() {
@@ -526,6 +717,7 @@ module aquarium_intake_clamp() {
     right_edge_clip();
 
     // back edge clamp
+    //translate([1,0,0])
     translate([iron_top_width + iron_top_side_indent_width + default_thickness,0,0])
     color([0, 0.7, 0])
     back_edge_clip();
@@ -534,6 +726,7 @@ module aquarium_intake_clamp() {
     //color([0.7, 0.7, 0, 0.2])
     //dummy_tee();
     
+    //translate([1,0,0])
     color([0, 0.7, 0])
     tee_shell();
 }
@@ -541,92 +734,6 @@ module aquarium_intake_clamp() {
 
 print_plate = 0;
 
-module fastener_hole(
-    hole_diameter=3.2,
-    hole_depth=6,
-    front_clearance=20,
-    rear_clearance=20,
-    front_counterbore_diameter=6.4,
-    rear_counterbore_diameter=6.4,
-) {
-    // screw hole
-    rotate([0,90,0])
-    translate([0,0,-hole_depth/2 - overcut])
-    cylinder(h=hole_depth + 2*overcut, d=hole_diameter, $fn=30);
-    
-    // head countersink
-    rotate([0,90,0])
-    translate([0,0,hole_depth/2])
-    cylinder(h=front_clearance, d=front_counterbore_diameter, $fn=30);
-    
-    // nut countersink
-    rotate([0,-90,0])
-    translate([0,0,hole_depth/2])
-    rotate([0,0,30])
-    cylinder(h=rear_clearance, d=rear_counterbore_diameter, $fn=6);
-}
-
-module fastener_block(
-    support_thickness=3,
-    od = 10,
-    hole_height=3.5,
-    brace_angle=45,
-) {
-    difference() {
-        union() {
-            // front disk
-            translate([-overcut,0,hole_height])
-            rotate([0, 90, 0])
-            cylinder(d=od, h=support_thickness+overcut);
-            
-            // front box
-            translate([-overcut,-od/2,-overcut])
-            cube([support_thickness+overcut, od, hole_height + overcut]);
-            
-            // sphere body
-            translate([support_thickness,0,hole_height])
-            sphere(d=od);
-            
-            // support brace
-            translate([support_thickness,0,hole_height])
-            rotate([0, 90+brace_angle, 0])
-            cylinder(d=od, h=(hole_height + od/2)/sin(brace_angle));
-            
-            // support box
-            translate([support_thickness,-od/2,hole_height])
-            rotate([0,brace_angle,0])
-            translate([0,0,-hole_height - overcut])
-            cube([(hole_height + od/2)/sin(brace_angle), od, hole_height + overcut]);    
-        }
-        
-        // trim the front (x < 0)
-        translate([
-            -(hole_height + od/2 + 2*overcut),
-            -(od/2 + overcut),
-            -(od/2 - hole_height + 2*overcut)
-        ])
-        cube([
-            hole_height + od/2 + 2*overcut,
-            od + 2*overcut,
-            od + hole_height + 2*overcut
-        ]);
-        
-        // trim the bottom (z < 0)
-        translate([
-            -overcut,
-            -(od/2 + overcut),
-            -((hole_height + od/2)/sin(brace_angle)
-                + (hole_height + od/2)/cos(brace_angle) + overcut)
-        ])
-        cube([
-            (hole_height + od/2)/sin(brace_angle)
-                + (hole_height + od/2)/cos(brace_angle) + 2*overcut,
-            od + 2*overcut,
-            (hole_height + od/2)/sin(brace_angle)
-                + (hole_height + od/2)/cos(brace_angle) + overcut,
-        ]);
-    }
-}
 
 if (print_plate) {
     //
