@@ -32,8 +32,13 @@ module fastener_block(
     brace_angle=45,
     fastener_notch_width=6.4,
     fastener_notch_depth=0.7,
+    preferred_bevel = -1,
 ) {
-    adjusted_bevel = min((od - fastener_notch_width - 2)/2, od/(2 + sqrt(2)));
+    adjusted_bevel = (
+        (preferred_bevel < 0)
+            ? min((od - fastener_notch_width - 2)/2, od/(2 + sqrt(2)))
+            : preferred_bevel
+    );
     
     difference() {
         union() {
@@ -122,149 +127,6 @@ module fastener_block(
     }    
 }
 
-module old_fastener_block(
-    support_thickness=3,
-    od = 10,
-    hole_height=3.5,
-    brace_angle=45,
-    fastener_notch_width=6.4,
-    fastener_notch_depth=0.7,
-) {
-    difference() {
-        union() {
-            // front disk
-            translate([-overcut,0,hole_height])
-            rotate([0, 90, 0])
-            cylinder(d=od, h=support_thickness+overcut);
-            
-            // front box
-            translate([-overcut,-od/2,-overcut])
-            cube([support_thickness+overcut, od, hole_height + overcut]);
-            
-            // front side bevels
-            translate([0,0,hole_height])
-            difference() {
-                rotate([45,0,0])
-                    translate([0, -od/2, -od/2])
-                    cube([support_thickness, od, od]);
-                translate([-overcut, -sqrt(2)*od/2 - overcut, 1/sqrt(2)*od/2])
-                    cube([support_thickness + 2*overcut, sqrt(2)*od + 2*overcut, sqrt(2)*od/2 + overcut]);
-            }
-            
-            // sphere body
-            translate([support_thickness,0,hole_height])
-            sphere(d=od);
-            
-            // support brace
-            translate([support_thickness,0,hole_height])
-            rotate([0, 90+brace_angle, 0])
-            cylinder(d=od, h=(hole_height + od/2)/sin(brace_angle));
-            
-            // support box
-            translate([support_thickness,-od/2,hole_height])
-            rotate([0,brace_angle,0])
-            translate([0,0,-hole_height - overcut])
-            cube([(hole_height + od/2)/sin(brace_angle), od, hole_height + overcut]);    
-            
-            // support brace bevels
-            translate([support_thickness,0,hole_height])
-            rotate([0, brace_angle, 0])
-            difference() {
-                rotate([45,0,0])
-                    translate([0, -od/2, -od/2])
-                    cube([(hole_height + od/2)/sin(brace_angle), od, od]);
-                translate([-overcut, -sqrt(2)*od/2 - overcut, 1/sqrt(2)*od/2])
-                    cube([
-                        (hole_height + od/2)/sin(brace_angle) + 2*overcut,
-                        sqrt(2)*od + 2*overcut,
-                        sqrt(2)*od/2 + overcut
-                    ]);
-            }
-            
-            // left bevel around curve
-            translate([support_thickness,0,hole_height])
-                rotate([-90 - 43, 0, 21]) // hack: what are these angles in the general case?
-                cylinder(h=od/2, d=od);
-
-            
-            // right bevel around curve
-            translate([support_thickness,0,hole_height])
-                rotate([90 + 43, 0, -21]) // hack: what are these angles in the general case?
-                cylinder(h=od/2, d=od);
-            
-        }
-        
-        // cut out a notch to reduce overhang for fasteners
-        translate([
-                support_thickness
-                    + (od - fastener_notch_width)/sqrt(2)*tan(brace_angle)
-                    + fastener_notch_depth,
-                -fastener_notch_width/2,
-                hole_height
-            ]) {
-            // cut out roof of hole
-            cube([fastener_notch_width*tan(brace_angle), fastener_notch_width, fastener_notch_width]);
-            
-            // shave off top of support
-            translate([0, 0, fastener_notch_width/2])
-                rotate([0, -brace_angle, 0])
-                cube([fastener_notch_width, fastener_notch_width, od/2/sin(brace_angle)]);
-        }
-        
-        // trim the front (x < 0)
-        translate([
-            -(hole_height + od/2 + 2*overcut),
-            -(od + overcut),
-            -(od - hole_height + 2*overcut)
-        ])
-        cube([
-            hole_height + od/2 + 2*overcut,
-            2*od + 2*overcut,
-            2*od + hole_height + 2*overcut
-        ]);
-        
-        // trim the bottom (z < 0)
-        translate([
-            -overcut,
-            -(od + overcut),
-            -((hole_height + od/2)/sin(brace_angle)
-                + (hole_height + od/2)/cos(brace_angle) + overcut)
-        ])
-        cube([
-            (hole_height + od/2)/sin(brace_angle)
-                + (hole_height + od/2)/cos(brace_angle) + 2*overcut,
-            2*od + 2*overcut,
-            (hole_height + od/2)/sin(brace_angle)
-                + (hole_height + od/2)/cos(brace_angle) + overcut,
-        ]);
-        
-        // trim the left side
-        translate([
-            -overcut,
-            od/2,
-            0
-        ])
-            cube([
-                (hole_height + od/2)/sin(brace_angle)
-                    + (hole_height + od/2)/cos(brace_angle) + 2*overcut,
-                od/2,
-                hole_height + od/2 + overcut,
-            ]);
-
-        // trim the right side
-        translate([
-            -overcut,
-            -od,
-            0
-        ])
-            cube([
-                (hole_height + od/2)/sin(brace_angle)
-                    + (hole_height + od/2)/cos(brace_angle) + 2*overcut,
-                od/2,
-                hole_height + od/2 + overcut,
-            ]);
-    }
-}
 
 module edge_clip(
     dx = 125,
@@ -481,7 +343,7 @@ module dummy_tee(expand=0, extend=0) {
 
 module tee_shell(
     thickness=default_thickness,
-    lower_length=70,
+    lower_length=75,
     bevel=default_bevel,
     extend=5,
 ) {
@@ -595,48 +457,72 @@ module tee_shell(
             
             // top right fastener block
             translate([0, pipe_od/2 + elbow_overlap - bevel - thickness, elbow_od/2 + thickness]) {
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
                 rotate([0,0,180])
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
             }
 
             // top left fastener block
             translate([0, -(pipe_od/2 + elbow_overlap - bevel - thickness), elbow_od/2 + thickness]) {
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
                 rotate([0,0,180])
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
             }
             
             // middle right fastener block
             translate([0, pipe_od/2 + elbow_overlap - bevel - thickness, -(elbow_od/2 + thickness)]) {
                 rotate([180,0,0])
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
                 rotate([180,0,180])
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
+                // central brace
+                rotate([0, 45, 0])
+                    translate([-10/2/sqrt(2), -10, -10/2/sqrt(2)])
+                    cube(10/sqrt(2));
             }
 
             // middle left fastener block
-            translate([0, -(pipe_od/2 + elbow_overlap - bevel - thickness), -(elbow_od/2 + thickness)]) {
+            translate([
+                0, 
+                -(pipe_od/2 + elbow_overlap - bevel - thickness),
+                -(elbow_od/2 + thickness)
+            ]) {
                 rotate([180,0,0])
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
                 rotate([180,0,180])
-                fastener_block($fn=60, hole_height=0, od=2*thickness, support_thickness=thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(elbow_octogon_side - 2*thickness)/2);
+                // central brace
+                rotate([0, 45, 0])
+                    translate([-10/2/sqrt(2), -0, -10/2/sqrt(2)])
+                    cube(10/sqrt(2));
             }
             
             // bottom right fastener block
             translate([0, pipe_od/2 + thickness, -lower_length + thickness + bevel]) {
                 rotate([-90,0,0])
-                fastener_block($fn=60, hole_height=0, od=2*thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(pipe_octogon_side - 2*thickness)/2);
                 rotate([90,0,180])
-                fastener_block($fn=60, hole_height=0, od=2*thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(pipe_octogon_side - 2*thickness)/2);
             }
 
             // bottom left fastener block
             translate([0, -(pipe_od/2 + thickness), -lower_length + thickness + bevel]) {
                 rotate([90,0,0])
-                fastener_block($fn=60, hole_height=0, od=2*thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(pipe_octogon_side - 2*thickness)/2);
                 rotate([-90,0,180])
-                fastener_block($fn=60, hole_height=0, od=2*thickness);
+                fastener_block($fn=60, hole_height=0, od=2*thickness,
+                    support_thickness=(pipe_octogon_side - 2*thickness)/2);
             }
         }
         // tee fitting/pipe cutout
@@ -645,19 +531,19 @@ module tee_shell(
         translate([siphon_offset_x, siphon_offset_y, siphon_offset_z]) {
             // top right fastener hole
             translate([0, pipe_od/2 + elbow_overlap - bevel - thickness, elbow_od/2 + thickness])
-            fastener_hole(hole_depth=2*thickness);
+            fastener_hole();
             
             // top left fastener hole
             translate([0, -(pipe_od/2 + elbow_overlap - bevel - thickness), elbow_od/2 + thickness])
-            fastener_hole(hole_depth=2*thickness);
+            fastener_hole();
 
             // middle right fastener hole
             translate([0, pipe_od/2 + elbow_overlap - bevel - thickness, -(elbow_od/2 + thickness)])
-            fastener_hole(hole_depth=2*thickness);
+            fastener_hole();
             
             // middle left fastener hole
             translate([0, -(pipe_od/2 + elbow_overlap - bevel - thickness), -(elbow_od/2 + thickness)])
-            fastener_hole(hole_depth=2*thickness);
+            fastener_hole();
 
             // bottom right fastener hole
             translate([0, pipe_od/2 + thickness, -lower_length + thickness + bevel])
@@ -700,36 +586,36 @@ module right_edge_clip() {
                 
                 // cut square to triangle
                 rotate([0,-45,0])
-                translate([-overcut,-overcut,0])
-                cube([
-                    sqrt(2)*(iron_top_width
-                        + iron_top_side_indent_width + default_thickness - default_bevel)
-                        + 2*overcut,        
-                    default_thickness + 2*overcut,
-                    sqrt(2)*(iron_top_width
-                        + iron_top_side_indent_width + default_thickness - default_bevel)
-                ]);
-          
+                    translate([-overcut,-overcut,0])
+                    cube([
+                        sqrt(2)*(iron_top_width
+                            + iron_top_side_indent_width + default_thickness - default_bevel)
+                            + 2*overcut,        
+                        default_thickness + 2*overcut,
+                        sqrt(2)*(iron_top_width
+                            + iron_top_side_indent_width + default_thickness - default_bevel)
+                    ]);
+              
                 // front edge bevel
                 translate([0, default_thickness, 0])
-                rotate([0,45,0])
-                rotate([0,0,-45])
-                translate([-default_bevel*sqrt(2)/2, -(default_bevel+overcut)*sqrt(2)/2,
-                    - overcut]) 
-                cube([default_bevel*sqrt(2), (default_bevel + overcut)*sqrt(2),
-                    sqrt(2)*(iron_top_width
-                        + iron_top_side_indent_width + default_thickness - default_bevel)
-                        + 2*overcut]);             
+                    rotate([0,45,0])
+                    rotate([0,0,-45])
+                    translate([-default_bevel*sqrt(2)/2, -(default_bevel+overcut)*sqrt(2)/2,
+                        - overcut]) 
+                    cube([default_bevel*sqrt(2), (default_bevel + overcut)*sqrt(2),
+                        sqrt(2)*(iron_top_width
+                            + iron_top_side_indent_width + default_thickness - default_bevel)
+                            + 2*overcut]);             
           
                 // back edge bevel
                 rotate([0,45,0])
-                rotate([0,0,45])
-                translate([-default_bevel*sqrt(2)/2, -(default_bevel+overcut)*sqrt(2)/2,
-                    - overcut]) 
-                cube([default_bevel*sqrt(2), (default_bevel + overcut)*sqrt(2),
-                    sqrt(2)*(iron_top_width
-                        + iron_top_side_indent_width + default_thickness - default_bevel)
-                        + 2*overcut]);
+                    rotate([0,0,45])
+                    translate([-default_bevel*sqrt(2)/2, -(default_bevel+overcut)*sqrt(2)/2,
+                        - overcut]) 
+                    cube([default_bevel*sqrt(2), (default_bevel + overcut)*sqrt(2),
+                        sqrt(2)*(iron_top_width
+                            + iron_top_side_indent_width + default_thickness - default_bevel)
+                            + 2*overcut]);
             }
             
             // pipe support internal bevel
@@ -752,15 +638,13 @@ module right_edge_clip() {
                 siphon_offset_y,
                 siphon_offset_z
             ])
-            difference() {
-                rotate([0, -90, 0]) {
+                rotate([0, -90, 0])
+                union() {
                     cylinder(h=8 - default_bevel, d=10, $fn=60);
+                    bevel=1;
                     translate([0,0,8 - default_bevel])
-                    cylinder(h=default_bevel, d1=10, d2=10-default_bevel*2, $fn=60);
+                    cylinder(h=bevel, d1=10, d2=10-bevel*2, $fn=60);
                 }
-            }
-            
-            // bottom screw block
         }
         
         // pipe support screw hole
@@ -791,11 +675,19 @@ module right_edge_clip() {
     ]) {
         difference() {
             rotate([180,0,180])
-            fastener_block($fn=60, hole_height=3.2, support_thickness=0);
+            fastener_block($fn=60);
 
             translate([0,0,-3.2])
             rotate([0,0,180])
             fastener_hole();
+            
+            translate([
+                -11.5,
+                0,
+                -11,
+            ])
+                rotate([0,0,225])
+                cube([12,12,12]);
         }
     }
     
@@ -811,7 +703,7 @@ module right_edge_clip() {
             fastener_block(
                 od=20,
                 hole_height=10,
-                support_thickness=5,
+                support_thickness=7.5,
                 $fn=60
             );
             translate([7,-10,0])
@@ -820,10 +712,10 @@ module right_edge_clip() {
         }
         translate([0, 0, 10])
             rotate([0,0,180])
-            fastener_hole(hole_depth=30);
+            fastener_hole(hole_depth=20);
         translate([7,-10,3.2+3])
         rotate([0,0,90])
-        fastener_hole(hole_depth=30);
+        fastener_hole(hole_depth=25);
     }
     
     // right toggle attachment block
@@ -836,38 +728,97 @@ module right_edge_clip() {
         fastener_block(
             od=20,
             hole_height=10,
-            support_thickness=5,
+            support_thickness=7.5,
             $fn=60
         );
         translate([0, 0, 10])
             rotate([0,0,180])
-            fastener_hole(hole_depth=30);
+            fastener_hole(hole_depth=20);
     }
 }
 
 module back_edge_clip() {
+
+    right_plate_length = 60;
 
     difference() {
         union() {
             // back clip
             translate([85,0,0])
             mirror([1,0,0])
-            edge_clip(dx=85, corner_distance=125, back_bevels=0, mask_left_back_bevels=40);
+            edge_clip(dx=85, corner_distance=125, back_bevels=0, mask_left_back_bevels=25);
 
-            // right side plate
-            translate([0, iron_top_width + iron_top_side_indent_width + default_thickness, 
-                    -(iron_top_indent_thickness + iron_top_indent_depth + default_thickness),
-            ])
-            cube([default_thickness, 60,
-                iron_top_indent_thickness + iron_top_indent_depth + 2*default_thickness]);
+            difference() {
+                // right side plate
+                translate([0, iron_top_width + iron_top_side_indent_width + default_thickness, 
+                        -(iron_top_indent_thickness + iron_top_indent_depth + default_thickness),
+                ])
+                cube([default_thickness, right_plate_length,
+                    iron_top_indent_thickness + iron_top_indent_depth + 2*default_thickness]);
 
+                translate([
+                    default_thickness,
+                    iron_top_width + iron_top_side_indent_width + default_thickness
+                        + right_plate_length,
+                    -iron_top_indent_depth - iron_top_indent_thickness - default_thickness
+                ]) {
+                    // front left edge bevel
+                    rotate([0,0,45])
+                        translate([
+                            -sqrt(2)*default_bevel/2,
+                            -sqrt(2)*default_bevel/2, 
+                            -overcut
+                        ])
+                        cube([
+                            sqrt(2)*default_bevel,
+                            sqrt(2)*default_bevel, 
+                            iron_top_indent_depth + iron_top_indent_thickness
+                                + 2*default_thickness + 2*overcut
+                        ]);
+
+                    // bottom front left edge bevel
+                    rotate([90,0,0])
+                        rotate([0,0,45])
+                        translate([
+                            -sqrt(2)*default_bevel/2,
+                            -sqrt(2)*default_bevel/2, 
+                            -overcut
+                        ])
+                        cube([
+                            sqrt(2)*default_bevel,
+                            sqrt(2)*default_bevel, 
+                            right_plate_length/2
+                        ]);
+
+                    // top front left edge bevel
+                    translate([
+                        0,
+                        0,
+                        iron_top_indent_depth + iron_top_indent_thickness + 2*default_thickness
+                    ])
+                        rotate([90,0,0])
+                        rotate([0,0,45])
+                        translate([
+                            -sqrt(2)*default_bevel/2,
+                            -sqrt(2)*default_bevel/2, 
+                            -overcut
+                        ])
+                        cube([
+                            sqrt(2)*default_bevel,
+                            sqrt(2)*default_bevel, 
+                            right_plate_length/2
+                        ]);
+                }
+            }
+            
             // back top right fastener block
             translate([
                 0,
                 7,
                 default_bevel,
             ])
-            fastener_block($fn=60, hole_height=default_thickness - default_bevel + 3.2);
+            fastener_block($fn=60, hole_height=default_thickness - default_bevel + 3.2,
+                support_thickness=5);
 
             // back bottom right fastener block
             translate([
@@ -876,7 +827,40 @@ module back_edge_clip() {
                 -iron_top_indent_depth - iron_top_indent_thickness - default_thickness
             ])
                 rotate([180,0,0])
-                fastener_block($fn=60, hole_height=3.2);
+                fastener_block($fn=60);
+
+            // right tee-shell
+            translate([-(iron_top_width + iron_top_side_indent_width + default_thickness),0,0])
+            difference() {
+                tee_shell();
+                translate([siphon_offset_x, siphon_offset_y-100, siphon_offset_z-100])
+                cube([100,200,200]);
+            }
+ 
+            // back tee-shell support
+            translate([
+                siphon_offset_x - iron_top_width - iron_top_side_indent_width
+                    - default_thickness,
+                siphon_offset_y - (pipe_od/2 + elbow_overlap - default_bevel - default_thickness),
+                default_thickness
+            ])
+            difference() {
+                rotate([0,45,0])
+                    translate([-10*sqrt(2)/2, -default_thickness/2, -10*sqrt(2)/2])
+                    cube([10*sqrt(2), 2*default_thickness, 10*sqrt(2)]);
+                
+                // cut off top of support (to avoid screw hole)
+                translate([-10*sqrt(2)/2, -default_thickness/2 - overcut, 6.6])
+                    cube([10*sqrt(2), default_thickness + 2*overcut, 10*sqrt(2)]);
+                
+                // cut off left side of top of support (to avoid left tee shell)
+                translate([0, -default_thickness/2 - overcut, 3.5])
+                    cube([10*sqrt(2), 2*default_thickness + 2*overcut, 10*sqrt(2)]);
+                
+                // cut off back left side of top of support (to avoid left tee shell)
+                translate([0, default_thickness - overcut, 0])
+                    cube([10*sqrt(2), 2*default_thickness + 2*overcut, 10*sqrt(2)]);
+            }
         }
 
         // front right fastener hole
@@ -909,24 +893,129 @@ module back_edge_clip() {
     }
 }
 
-module aquarium_intake_clamp() {
+module left_tee_shell() {
+    // left tee-shell
+    difference() {
+        tee_shell();
+        
+        // cut out the right half
+        translate([siphon_offset_x-100, siphon_offset_y-100, siphon_offset_z-100])
+        cube([100,200,200]);
+        
+        // cut out a slot for the edge clip
+        clearance = 1;
+        translate([
+            siphon_offset_x-100,
+            0,
+            -iron_top_indent_depth - iron_top_indent_thickness - default_thickness - clearance
+        ])
+            difference() {
+                // main cutout
+                cube([
+                    200,
+                    iron_top_width + iron_top_side_indent_width + default_thickness + clearance,
+                    iron_top_indent_depth + iron_top_indent_thickness 
+                        + 2*default_thickness + 2*clearance
+                ]);
+                
+                // top cuttout inside corner bezel
+                translate([
+                    0,
+                    iron_top_width + iron_top_side_indent_width + default_thickness + clearance,
+                    iron_top_indent_depth + iron_top_indent_thickness 
+                        + 2*default_thickness + 2*clearance
+                ])
+                    rotate([45,0,0])
+                    translate([0, -default_bevel*sqrt(2)/2, -default_bevel*sqrt(2)/2])
+                    cube([200, default_bevel*sqrt(2), default_bevel*sqrt(2)]);
+
+                
+                // bottom cuttout inside corner bezel
+                translate([
+                    0,
+                    iron_top_width + iron_top_side_indent_width + default_thickness + clearance,
+                    0
+                ])
+                    rotate([45,0,0])
+                    translate([0, -default_bevel*sqrt(2)/2, -default_bevel*sqrt(2)/2])
+                    cube([200, default_bevel*sqrt(2), default_bevel*sqrt(2)]);
+                
+            }
+    }
+}
+
+module beveled_cylinder(d, h, bevel) {
+    union() {
+        // bottom surface/bevel
+        cylinder(h=bevel, d1=d-2*bevel, d2=d);
+
+        // middle body
+        translate([0,0,bevel])
+            cylinder(h=h - 2*bevel, d=d);
+
+        // top bevel/surface
+        translate([0,0,h - bevel])
+            cylinder(h=bevel, d1=d, d2=d-2*bevel);
+    }
+}
+
+module toggle(
+    d=20,
+    l=30,
+    h=default_thickness*2,
+    bevel=default_bevel,
+) {
+    difference() {
+        hull() {
+            beveled_cylinder(d, h, bevel);
+
+            translate([l,0,0])
+                beveled_cylinder(d, h, bevel);
+        }
+        
+        rotate([0, -90, 0])
+            fastener_hole(hole_depth=10);
+    }
+}
+
+module aquarium_intake_clamp(explode=0) {
     // right edge clamp
-    color([0.5, 0.7, 0])
-    right_edge_clip();
+    translate([-explode,0,0])
+        color([0.5, 0.7, 0])
+        right_edge_clip();
 
     // back edge clamp
     //translate([1,0,0])
     translate([iron_top_width + iron_top_side_indent_width + default_thickness,0,0])
-    color([0, 0.7, 0])
-    back_edge_clip();
-    
-    // top tee    
-    //color([0.7, 0.7, 0, 0.2])
-    //dummy_tee();
-    
-    //translate([1,0,0])
-    color([0, 0.7, 0])
-    tee_shell();
+        color([0, 0.7, 0])
+        back_edge_clip();
+ 
+    // left tee shell
+    translate([explode,0,0])
+        color([0.0, 0.7, 0.4])
+        left_tee_shell();
+
+    // back toggle
+    translate([
+        iron_top_width + iron_top_side_indent_width + default_thickness - explode - 10,
+        -explode,
+        10 + default_bevel
+    ])
+        color([0.7, 0.7, 0.0])
+        rotate([90,90,0])
+        toggle($fn=60);
+
+    // right toggle
+    translate([
+        -2*explode,
+        75,
+        10 + default_bevel
+    ])
+        color([0.7, 0.7, 0.0])
+        rotate([90,90,-90])
+        toggle($fn=60);
+
+    // tee_shell();
 }
 
 
@@ -975,14 +1064,38 @@ module test_connector_cube() {
 }
 
 
-print_plate = 0;
-print_test_connectors=1;
+print_plate = 1;
+print_test_connectors=0;
+
 
 if (print_plate) {
-    //
+    // right edge clip
+    translate([-100,50,0])
     rotate([0,90,0])
-    translate([-(iron_top_width + iron_top_side_indent_width + default_thickness),0,0])
-    right_edge_clip();
+        translate([-(iron_top_width + iron_top_side_indent_width + default_thickness),0,0])
+        right_edge_clip();
+    
+    // back edge clip
+    rotate([0,-90,0])
+    translate([iron_top_width + iron_top_side_indent_width + default_thickness,0,0])
+        translate([-(iron_top_width + iron_top_side_indent_width + default_thickness),0,0])
+        back_edge_clip();
+    
+    // left tee shell
+    translate([-35, 85, elbow_od/2 + default_thickness])
+    rotate([0,90,0])
+    translate([-siphon_offset_x, 0, 0])
+    left_tee_shell();
+    
+    // back toggle
+    translate([-110,35,0])
+        toggle();
+    
+    // side toggle
+    translate([-110,10,0])
+        toggle();
+
+    
 } else if (print_test_connectors) {
     difference() {
         union() {
@@ -1004,14 +1117,9 @@ if (print_plate) {
             cube([100, 100, 20]);
     }
 } else {
-    aquarium_intake_clamp();
+    aquarium_intake_clamp(explode=15);
 }
 
 // TODO:
-// test cubes for fastener blocks
-// toggles
 // remaining bevels
-// split into components
-// additional inside bevels on inside corners and back of T where it connects to clamp
-// final check and tabulation of fastener lengths
 // final check of unions and kissing surfaces
