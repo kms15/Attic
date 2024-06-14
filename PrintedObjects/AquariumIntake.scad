@@ -337,8 +337,8 @@ module siphon(
 
     // top air camlock socket
     translate([
-            siphon_offset_x, 
-            siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance 
+            siphon_offset_x,
+            siphon_offset_y + pipe_od/2 + elbow_overlap + fitting_clearance
                 + npt_adapter_length - camlock_female_npt_overlap,
                 aquarium_height + siphon_height])
         rotate([-90,0,0])
