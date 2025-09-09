@@ -175,7 +175,7 @@ Add an ip address and subnet to the bond
 ip a add 192.168.9.3/24 dev bond0
 ```
 
-## Other possible approaches
+## Other possible approaches not used
 
 ### DPDK
 
@@ -188,30 +188,49 @@ to have to learn.
 
 ### Switchdev, tc-flower
 
-Switchdev and tc-flower seem like the future of linux network offloading.
+Switchdev and tc-flower seem like a promising kernel-supported method for
+hardware offloading.
 Unfortunately with this card, the debian 13 kernel/drivers, and the minimal
 tuning I was able to figure out it was not nearly as performant
-as the legacy pathway. Just using devlink to switch the device from legacy
-to switchdev mode decreased the throughput from ~90 Gbps to ~30 Gbps, and this
-did not seem to improve with various settings I tried. This appears to allow for
-much more general offloading than the iproute2 path (e.g. using tc rules to
-do routing, firewalls, etc), and I hope to play with it more on the future in a
-setting where it has a lower performance penalty.
+as the legacy pathway. Notes so far:
+
+  - Changing the switch mode via devlink from legacy to switchdev seems to
+    drop the number of channels from 32 to 1, which hurts performance (e.g.
+    iperf3 ~90 Gbps drops to ~30 Gbps). This can be fixed with ethtool, e.g.
+    ```
+    sudo ethtool -L enp3s0f0np0 combined 32
+    ```
+
+  - Even with that change I can't seem to get the kernel to offload any of the
+    tc rules to hardware. Although the NVIDIA documentation suggests this should
+    be possible, I tried a lot of things without success and the general
+    consensus in forums seems to be that you need a ConnectX 6 or newer for
+    this to work.  I could upgrade the NICs, but right now the costs seem to
+    outweigh the potential benefits.
+
+  - The tc flower rules are quite low level (e.g. they don't even implement
+    mac learning?) and would probably be much easier to use with a higher
+    level tool running on top (e.g. open vswitch).
+
 
 ### Open v-switch
 
 This seems like a very useful bit of software for both providing richer switch
 functionality (e.g. RTSP) and allowing for sophisticated network topologies
 for VMs while supporting hardware offloading either through tc/switchdev or
-through DPDK. In my experiments I found it easy to use, but it dropped the
-iperf3 performance with switchdev to ~12 Gbps, so didn't seem to be a good
-fit with this hardware for this use case (at least with my current hardware
-and skillset).
+through DPDK. In my experiments I found it easy to use, but without hardware
+offloading it dropped the iperf3 performance to ~12 Gbps, so didn't seem to be
+a good fit with this hardware for this use case (at least with my current
+hardware and skillset). I think I'm very likely to use it in situations with
+less stringent performance goals or in situations where I am able to get the
+hardware offloading working.
+
 
 ### vDPA
 
-A newer technology that allows the use of the virtio device driver in the VM
-talking almost directly to the underlying hardware. This requires newer
-hardware (e.g. a ConnectX-6 Dx). It has some advantages like making migration
-of virtual machines easier, but sounds like it as not as performant as SR-IOV
-and the hardware requirement puts it out of scope for this project.
+A newer technology that allows SR-IOV-like performance for a VM using a VirtIO
+like driver, basically by creating a standard interface for hardware to expose
+(much like NVMe has done for storage). This would allow for things like
+live-migration of VMs between machines even with NICs from different vendors.
+It sounds like it will be a great technology, but is not fully mature yet and
+will require newer hardware (e.g. a ConnectX 6) than what I have.
