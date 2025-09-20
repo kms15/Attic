@@ -11,7 +11,7 @@ fast streaming data to GPU nodes doing ML training while still providing a
 multi-tenent-like setup to keep my work, my household/iot/family networks, and
 work with friends and collaborators isolated from each other.
 
-## Approach using iproute2 functionality
+## Common steps
 
 ### Step 0 (once per OS-install) install prerequisites
 
@@ -64,7 +64,9 @@ Reboot the system to set up the new PCIe BAR, etc. for SR-IOV
 sudo reboot
 ```
 
-### Step 2 set up host machine networking (on each boot of the host machine)
+## Approach 1 using iproute2 functionality
+
+### Step 2A1 set up host machine networking (on each boot of the host machine)
 
 Set each of the physical functions (PFs, corresponding to the two ports on the
 network card) to have 2 virtual functions (works fine with 16 VFs and probably
@@ -132,7 +134,7 @@ sudo qemu-system-x86_64 -accel kvm -nographic -m 8G -cpu host -smp 16 \
     -device vfio-pci,host=0000:03:02.3
 ```
 
-### Step 3 set up the bond on the vm (on each boot of the VM)
+### Step 2A2 set up the bond on the vm (on each boot of the VM)
 
 Load the bonding kernel module with ~100ms link health checks
 
@@ -175,16 +177,103 @@ Add an ip address and subnet to the bond
 ip a add 192.168.9.3/24 dev bond0
 ```
 
+## Approach 2 using DPDK and OVS (WIP)
+
+
+### Step 2B1 (once per OS-install) install prerequisites
+
+We will need DPDK and the DPDK-enabled version of openvswitch:
+
+```
+sudo apt install openvswitch-switch-dpdk dpdk
+```
+
+By default the non-DPDK open-vswitch daemon is used, so we need to switch to
+the DPDK version:
+
+```
+sudo update-alternatives --set ovs-vswitchd \
+    /usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
+```
+
+### Step 2B2 (Once per boot) network card setup
+
+Set each of the physical functions (PFs, corresponding to the two ports on the
+network card) to have 2 virtual functions (works fine with 16 VFs and probably
+higher).
+
+```
+echo '2' | sudo tee -a /sys/class/net/enp3s0f1np1/device/sriov_numvfs
+echo '2' | sudo tee -a /sys/class/net/enp3s0f0np0/device/sriov_numvfs
+```
+
+The VFs need to be unbound before switching to switchdev mode:
+
+```
+echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+```
+
+The PFs can then be set into switchdev mode:
+
+```
+sudo devlink dev eswitch set pci/0000:03:00.0 mode switchdev
+sudo devlink dev eswitch set pci/0000:03:00.1 mode switchdev
+```
+
+### Step 2B3 (Once per OS-install?) OVS configuration
+
+Enable DPDK hardware offloads
+
+```
+sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true
+sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:hw-offload=true
+```
+
+Configure the DPDK allow-list to discover the network card at 03:00 with both
+physical ports (PFs) and VFs 0-1 for each. Also set some other
+[acceleration options](https://doc.dpdk.org/guides/nics/mlx5.html).
+
+```
+sudo ovs-vsctl set Open_vSwitch . \
+    other_config:dpdk-extra="-a 0000:03:00.0,representor=pf[0,1]vf[0-1],dv_flow_en=1,dv_xmeta_en=1,sys_mem_en=1"
+```
+
+TODO: verify above; have only tried ovs-vsctl set Open_vSwitch . other_config:dpdk-extra="-a 0000:03:00.0,representor=[0,65535],dv_flow_en=1,dv_xmeta_en=1,sys_mem_en=1"
+
+Create an OVS bridge for DPDK
+
+```
+sudo ovs-vsctl add-br br0-ovs \
+    -- set Bridge br0-ovs datapath_type=netdev \
+    -- br-set-external-id br0-ovs bridge-id br0-ovs \
+    -- set bridge br0-ovs fail-mode=standalone
+```
+
+Add physical functions to the bridge (TODO: plural?)
+
+```
+sudo ovs-vsctl add-port br0-ovs p0 \
+    -- set Interface p0 type=dpdk options:dpdk-devargs=0000:03:00.0
+```
+
+Add the representors for the VFs (TODO: per PF?)
+
+```
+sudo ovs-vsctl add-port br0-ovs pf0vf0 \
+    -- set Interface pf0vf0 type=dpdk options:dpdk-devargs=0000:03:00.0,representor=[0]
+```
+
+Restart OVS to load the new configuration
+
+```
+sudo systemctl restart openvswitch-switch
+```
+
+
 ## Other possible approaches not used
-
-### DPDK
-
-Nvidia has
-[published results](https://fast.dpdk.org/doc/perf/DPDK_22_03_NVIDIA_Mellanox_NIC_performance_report.pdf)
-showing line-rate speeds from KVM with a carefully tuned setup with this card.
-This might be a good option, but the DPDK tools are a completely different code
-path than the normal linux networking and thus seemed like a more niche skillset
-to have to learn.
 
 ### Switchdev, tc-flower
 
@@ -211,19 +300,6 @@ as the legacy pathway. Notes so far:
   - The tc flower rules are quite low level (e.g. they don't even implement
     mac learning?) and would probably be much easier to use with a higher
     level tool running on top (e.g. open vswitch).
-
-
-### Open v-switch
-
-This seems like a very useful bit of software for both providing richer switch
-functionality (e.g. RTSP) and allowing for sophisticated network topologies
-for VMs while supporting hardware offloading either through tc/switchdev or
-through DPDK. In my experiments I found it easy to use, but without hardware
-offloading it dropped the iperf3 performance to ~12 Gbps, so didn't seem to be
-a good fit with this hardware for this use case (at least with my current
-hardware and skillset). I think I'm very likely to use it in situations with
-less stringent performance goals or in situations where I am able to get the
-hardware offloading working.
 
 
 ### vDPA
