@@ -232,6 +232,11 @@ sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true
 sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:hw-offload=true
 ```
 
+Enable huge pages
+```
+echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+```
+
 Configure the DPDK allow-list to discover the network card at 03:00 with both
 physical ports (PFs) and VFs 0-1 for each. Also set some other
 [acceleration options](https://doc.dpdk.org/guides/nics/mlx5.html).
@@ -241,7 +246,43 @@ sudo ovs-vsctl set Open_vSwitch . \
     other_config:dpdk-extra="-a 0000:03:00.0,representor=pf[0,1]vf[0-1],dv_flow_en=1,dv_xmeta_en=1,sys_mem_en=1"
 ```
 
-TODO: verify above; have only tried ovs-vsctl set Open_vSwitch . other_config:dpdk-extra="-a 0000:03:00.0,representor=[0,65535],dv_flow_en=1,dv_xmeta_en=1,sys_mem_en=1"
+Restart OVS to load the new configuration
+
+```
+sudo systemctl restart openvswitch-switch
+```
+
+Set up the physical functions (in this case to allow jumbo frames plus some
+extra room for things like vxlan or geneve headers):
+Set the PFs down
+
+```
+sudo ip link set down dev enp3s0f0np0
+sudo ip link set down dev enp3s0f1np1
+```
+
+Load the bonding kernel module with ~100ms link health checks
+
+```
+sudo modprobe bonding miimon=100
+```
+
+Create the bonding interface and link the PF to the bond
+
+```
+sudo ip link add dev bond0 type bond mode active-backup
+sudo ip link set dev enp3s0f0np0 master bond0
+sudo ip link set dev enp3s0f1np1 master bond0
+```
+
+Set the MTU on the PFs and bond to allow for jumbo frames (in this case 9000
+bytes plus some extra space for L2 headers and things like vxlan or geneve)
+
+```
+sudo ip link set mtu 9080 dev enp3s0f0np0
+sudo ip link set mtu 9080 dev enp3s0f1np1
+sudo ip link set mtu 9080 dev bond0
+```
 
 Create an OVS bridge for DPDK
 
@@ -252,26 +293,37 @@ sudo ovs-vsctl add-br br0-ovs \
     -- set bridge br0-ovs fail-mode=standalone
 ```
 
-Add physical functions to the bridge (TODO: plural?)
+Add physical functions to the bridge
 
 ```
 sudo ovs-vsctl add-port br0-ovs p0 \
-    -- set Interface p0 type=dpdk options:dpdk-devargs=0000:03:00.0
+    -- set Interface p0 type=dpdk mtu_request=9080 \
+       options:dpdk-lsc-interrupt=true \
+       options:dpdk-devargs=0000:03:00.0
 ```
 
-Add the representors for the VFs (TODO: per PF?)
+Add the representors for the VFs
 
 ```
 sudo ovs-vsctl add-port br0-ovs pf0vf0 \
-    -- set Interface pf0vf0 type=dpdk options:dpdk-devargs=0000:03:00.0,representor=[0]
+    -- set Interface pf0vf0 mtu_request=9080 \
+        type=dpdk options:dpdk-devargs=0000:03:00.0,representor=[0]
 ```
 
-Restart OVS to load the new configuration
+Bring all of the devices up
 
 ```
-sudo systemctl restart openvswitch-switch
+sudo ip link set up dev enp3s0f0np0
+sudo ip link set up dev enp3s0f1np1
+sudo ip link set up dev bond0
+sudo ip link set up dev enp3s0f0r0
+sudo ip link set up dev br0-ovs
 ```
 
+Problem: works, but with the bond in place a VF will not fail over to the other
+PF (e.g. VF LAG is not working). This might be an issue with the VF not being
+marked as trusted, but I get a "RTNETLINK answers: Operation not permitted"
+error when I try to set the trust with the ip command.
 
 ## Other possible approaches not used
 
