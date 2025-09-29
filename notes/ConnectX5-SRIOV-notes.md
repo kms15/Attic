@@ -11,6 +11,66 @@ fast streaming data to GPU nodes doing ML training while still providing a
 multi-tenent-like setup to keep my work, my household/iot/family networks, and
 work with friends and collaborators isolated from each other.
 
+## Materials and Methods
+
+### Hardware
+
+Two machines each with Epyc 4545P processors and ConnectX-5 Ex cards in x8
+PCIe slots.
+
+### Software stacks tried
+
+ - Legacy linux kernel stack (i.e. not using switchdev) with SR-IOV and VLAN
+   tunnels using the mlx5 driver offloads available for LAG and VLAN tagging.
+ - OVS and DPDK with SR-IOV and VXLAN tunnels using the mlx5 driver offloads.
+ - OVS and switchdev/tc with SR-IOV and VXLAN tunnels using the mlx5 offloads.
+
+### Network performance measurements
+
+The throughput for each approach was measured with iperf3 with different MTU
+and number of threads, recorded below as iperf3/<MTU>/<THREADS>. Because there
+was significant variability (perhaps based on cpu core assignment?) the command
+was run 3 times and the median of the 6 values recorded. Here is an example
+command with 2 threads:
+
+```
+iperf3 --parallel 2 --bidi --client 192.168.10.1
+```
+
+The latency for each approach was measured using a flood ping, with one warm up
+run (to initialize the flows) followed by three more runs, with the median
+recorded.
+
+```
+ping -fc 10000 192.168.10.1
+```
+
+## Results
+
+| Approach         | iperf3/1500/2 (Gb/s) | iperf3/9000/2 (Gb/s) | iperf3/9000/6 (Gb/s) | ping mean (us) | ping mdev (us) |
+| ---------------- | -------------------- | -------------------- | -------------------- | -------------- | -------------- |
+| legacy + VLAN    |        70            |           82         |            95        |         30     |       7        |
+| ovs/dpdk + VXLAN |        61            |           85         |            96        |         32     |       3        |
+| ovs/tc + VXLAN   |        83            |           86         |            96        |         28     |       5        |
+
+
+## Conclusions
+
+- The legacy software stack appears to perform relatively well with SR-IOV and
+  VLAN offloading and worked well with the stock linux kernel driver
+  in debian 13. Unfortunately appears to have more limited support for
+  offloads beyond this (e.g. VXLAN, traffic filtering, etc) and I wasn't able
+  to get the VF-LAG offloading to work, meaning each virtual machine needed
+  to configure its own bond from two separate VFs.
+- OVS+DPDK performed relatively well (and probably could perform better with
+  tuning) and provides a lot of further features, including good openstack
+  integration. It does require one core running at full speed all of the time
+  doing polling (which is not ideal environmentally) and I wasn't able to get
+  it working without installing the proprietary NVIDIA driver.
+- OVS and switchdev/tc performed quite well, and provides a relatively rich
+  feature set. I wasn't able to get it running without installing the
+  proprietary NVIDIA driver, however.
+
 ## Common steps
 
 ### Step 0 (once per OS-install) install prerequisites
@@ -88,38 +148,30 @@ sudo ip link set dev enp3s0f1np1 vf 1 vlan 40
 ```
 
 The VFs that will be passed to the virtual machine need to be bound to the
-vfio-pci driver, so first unbind them from the mlx5 driver:
+vfio-pci driver. First we load the vfio-pci module and inform it that it can
+bind to this type of device:
 
 ```
-echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-```
-
-Oddly enough the vfio-pci driver would not allow the VFs to be bound until
-the pcie device id had been registered with the driver, but at that point it
-bound both of the unbound devices automatically. Thus the following worked to
-bind both VFs
-
-```
+sudo modprobe vfio-pci
 echo $(cat /sys/bus/pci/devices/0000\:03\:00.3/{vendor,device}) \
     | sudo tee /sys/bus/pci/drivers/vfio-pci/new_id
 ```
 
-Additional VFs would need to be bound with syntax similar to the unbind
-commands above, however (catting VFs the PCIe address to the vfio driver's
-bind instead of the mlx5_core's bind).
-
-Next we set the vf's mac addresses. I'm not 100% sure this is needed, but it
-was included in some of the SR-IOV examples and bonds weren't working when I
-tried getting things to work without it (but that may have been broken by
-something else during that experiment). Obviously these should be chosen to be
-globally unique.
+Now we unbind the ports from the mlx5_core driver and rebind them to the
+vfio-pci driver.
 
 ```
-sudo ip link set enp3s0f0np0 vf 0 mac e2:11:22:33:11:00
-sudo ip link set enp3s0f0np1 vf 0 mac e2:11:22:33:11:01
-sudo ip link set enp3s0f1np1 vf 0 mac e2:11:22:33:11:10
-sudo ip link set enp3s0f1np1 vf 1 mac e2:11:22:33:11:11
+echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+```
+Set the MTU on the PFs to allow for jumbo frames (in this case 9000
+bytes plus some extra space for L2 headers and things like vxlan or geneve)
+
+```
+sudo ip link set mtu 9080 dev enp3s0f0np0
+sudo ip link set mtu 9080 dev enp3s0f1np1
 ```
 
 Run qemu, using pci-passthrough for one VF from each PF (physical function, i.e.
@@ -127,7 +179,9 @@ port). In this example, you can log in to the VM with root with a blank
 password.
 
 ```
-wget https://cloud.debian.org/images/cloud/trixie/20250814-2204/debian-13-nocloud-amd64-20250814-2204.qcow2
+if ! [ -f debian-13-nocloud-amd64-20250814-2204.qcow2 ]; then
+    wget https://cloud.debian.org/images/cloud/trixie/20250814-2204/debian-13-nocloud-amd64-20250814-2204.qcow2
+fi
 sudo qemu-system-x86_64 -accel kvm -nographic -m 8G -cpu host -smp 16 \
     -drive file=debian-13-nocloud-amd64-20250814-2204.qcow2 \
     -device vfio-pci,host=0000:03:00.3  \
@@ -136,16 +190,10 @@ sudo qemu-system-x86_64 -accel kvm -nographic -m 8G -cpu host -smp 16 \
 
 ### Step 2A2 set up the bond on the vm (on each boot of the VM)
 
-Load the bonding kernel module with ~100ms link health checks
-
-```
-modprobe bonding miimon=100
-```
-
 Create the bonding interface
 
 ```
-sudo ip link add dev bond0 type bond mode active-backup
+sudo ip link add dev bond0 type bond mode active-backup miimon 100
 ```
 
 Set the bond interface and its future child interfaces to be down
@@ -166,21 +214,25 @@ ip link set ens5 master bond0
 Set the bond and its child interfaces to be up again
 
 ```
-ip link set dev ens4 up
-ip link set dev ens5 up
-ip link set dev bond0 up
+ip link set dev ens4 up mtu 9000
+ip link set dev ens5 up mtu 9000
+ip link set dev bond0 up mtu 9000
 ```
 
 Add an ip address and subnet to the bond
 
 ```
-ip a add 192.168.9.3/24 dev bond0
+ip addr add 192.168.10.2/24 dev bond0
 ```
 
-## Approach 2 using DPDK and OVS (WIP)
+## Approach 2 using DPDK and OVS
 
 
 ### Step 2B1 (once per OS-install) install prerequisites
+
+TODO: this did not result in a working VF LAG setup with the stock debian
+packages described in this subsection, and only seemed to work when I installed
+the proprietary NVIDIA packages (described in approach 3).
 
 We will need DPDK and the DPDK-enabled version of openvswitch:
 
@@ -198,25 +250,14 @@ sudo update-alternatives --set ovs-vswitchd \
 
 ### Step 2B2 (Once per boot) network card setup
 
-Set each of the physical functions (PFs, corresponding to the two ports on the
-network card) to have 2 virtual functions (works fine with 16 VFs and probably
-higher).
+Make sure we have no VFs bound to the driver
 
 ```
-echo '2' | sudo tee -a /sys/class/net/enp3s0f1np1/device/sriov_numvfs
-echo '2' | sudo tee -a /sys/class/net/enp3s0f0np0/device/sriov_numvfs
+echo '0' | sudo tee -a /sys/class/net/enp3s0f0np0/device/sriov_numvfs
+echo '0' | sudo tee -a /sys/class/net/enp3s0f1np1/device/sriov_numvfs
 ```
 
-The VFs need to be unbound before switching to switchdev mode:
-
-```
-echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-echo "0000:03:00.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-echo "0000:03:02.3" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-```
-
-The PFs can then be set into switchdev mode:
+Switch the device into switchdev mode
 
 ```
 sudo devlink dev eswitch set pci/0000:03:00.0 mode switchdev
@@ -242,8 +283,8 @@ physical ports (PFs) and VFs 0-1 for each. Also set some other
 [acceleration options](https://doc.dpdk.org/guides/nics/mlx5.html).
 
 ```
-sudo ovs-vsctl set Open_vSwitch . \
-    other_config:dpdk-extra="-a 0000:03:00.0,representor=pf[0,1]vf[0-1],dv_flow_en=1,dv_xmeta_en=1,sys_mem_en=1"
+sudo ovs-vsctl --no-wait set Open_vSwitch . \
+    other_config:dpdk-extra="-a 0000:03:00.0,representor=pf[0,1]vf[0-1],dv_flow_en=1,dv_xmeta_en=1,dv_esw_en=1"
 ```
 
 Restart OVS to load the new configuration
@@ -261,16 +302,10 @@ sudo ip link set down dev enp3s0f0np0
 sudo ip link set down dev enp3s0f1np1
 ```
 
-Load the bonding kernel module with ~100ms link health checks
-
-```
-sudo modprobe bonding miimon=100
-```
-
 Create the bonding interface and link the PF to the bond
 
 ```
-sudo ip link add dev bond0 type bond mode active-backup
+sudo ip link add dev bond0 type bond mode active-backup miimon 100
 sudo ip link set dev enp3s0f0np0 master bond0
 sudo ip link set dev enp3s0f1np1 master bond0
 ```
@@ -284,30 +319,68 @@ sudo ip link set mtu 9080 dev enp3s0f1np1
 sudo ip link set mtu 9080 dev bond0
 ```
 
-Create an OVS bridge for DPDK
+NB: you should wait until the LAG state is initialized ("active") before any
+VFs are bound, or the VF LAG offloading may fail.
 
 ```
-sudo ovs-vsctl add-br br0-ovs \
-    -- set Bridge br0-ovs datapath_type=netdev \
-    -- br-set-external-id br0-ovs bridge-id br0-ovs \
-    -- set bridge br0-ovs fail-mode=standalone
+while ! [ $(sudo cat /sys/kernel/debug/mlx5/0000:03:00.0/lag/state) == "active" ]; do printf .; sleep 1; done; echo
 ```
 
-Add physical functions to the bridge
+Now we can create some VFs, as needed
 
 ```
-sudo ovs-vsctl add-port br0-ovs p0 \
+echo '2' | sudo tee -a /sys/class/net/enp3s0f0np0/device/sriov_numvfs
+```
+
+Create an OVS bridge for the physical network
+
+```
+sudo ovs-vsctl add-br br-phy \
+    -- set Bridge br-phy datapath_type=netdev \
+    -- br-set-external-id br-phy bridge-id br-phy \
+    -- set bridge br-phy fail-mode=standalone \
+        other_config:hwaddr=$(cat /sys/class/net/bond0/address)
+```
+
+Add the bond to the bridge
+
+```
+sudo ovs-vsctl add-port br-phy p0 \
     -- set Interface p0 type=dpdk mtu_request=9080 \
        options:dpdk-lsc-interrupt=true \
        options:dpdk-devargs=0000:03:00.0
 ```
 
-Add the representors for the VFs
+Set an IP address for the br-phy bridge
 
 ```
-sudo ovs-vsctl add-port br0-ovs pf0vf0 \
+sudo ip addr add 192.168.9.2/24 dev br-phy
+```
+
+Create an OVS bridge for the VXLAN
+
+```
+sudo ovs-vsctl add-br br-vxlan \
+    -- set Bridge br-vxlan datapath_type=netdev \
+    -- br-set-external-id br-vxlan bridge-id br-vxlan \
+    -- set bridge br-vxlan fail-mode=standalone
+```
+
+Add a representor for the VF to the vxlan bridge
+
+```
+sudo ovs-vsctl add-port br-vxlan pf0vf0 \
     -- set Interface pf0vf0 mtu_request=9080 \
         type=dpdk options:dpdk-devargs=0000:03:00.0,representor=[0]
+```
+
+Add a vxlan tunnel port to the vxlan bridge
+
+```
+sudo ovs-vsctl add-port br-vxlan vxlan0 \
+    -- set interface vxlan0 type=vxlan \
+        options:local_ip=192.168.9.2 options:remote_ip=192.168.9.1 \
+        options:key=42 options:dst_port=4789
 ```
 
 Bring all of the devices up
@@ -317,7 +390,43 @@ sudo ip link set up dev enp3s0f0np0
 sudo ip link set up dev enp3s0f1np1
 sudo ip link set up dev bond0
 sudo ip link set up dev enp3s0f0r0
-sudo ip link set up dev br0-ovs
+sudo ip link set up dev br-phy
+sudo ip link set up dev br-vxlan
+```
+
+Next, we need to bind the VF to the vfio driver on the host. First, load the
+vfio driver and let it know that it should claim this type of device:
+
+```
+sudo modprobe vfio-pci
+echo $(cat /sys/bus/pci/devices/0000\:03\:00.2/{vendor,device}) \
+    | sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id
+```
+
+Unbind the VF from the mlx5 driver and rebind it to the vfio driver
+
+```
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+```
+
+Run qemu, using pci-passthrough for a VF. In this example, you can log in to
+the VM with root with a blank password.
+
+```
+if ! [ -f debian-13-nocloud-amd64-20250814-2204.qcow2 ]; then
+    wget https://cloud.debian.org/images/cloud/trixie/20250814-2204/debian-13-nocloud-amd64-20250814-2204.qcow2
+fi
+sudo qemu-system-x86_64 -accel kvm -nographic -m 8G -cpu host -smp 16 \
+    -drive file=debian-13-nocloud-amd64-20250814-2204.qcow2 \
+    -device vfio-pci,host=0000:03:00.2
+```
+
+In the VM, you can just configure this NIC as usual
+
+```
+sudo ip addr add dev ens4 192.168.10.2/24
+sudo ip link set dev ens4 up mtu 9000
 ```
 
 Problem: works, but with the bond in place a VF will not fail over to the other
@@ -325,34 +434,159 @@ PF (e.g. VF LAG is not working). This might be an issue with the VF not being
 marked as trusted, but I get a "RTNETLINK answers: Operation not permitted"
 error when I try to set the trust with the ip command.
 
+## Approach 3 using switchdev and tc flower
+
+I wasn't able to get any of the tc flower offloading working with the version
+of the mlx5 driver in debian 13 despite many hours of trying. I finally gave up
+and tried installing the proprietary driver and then things just worked.
+The approach below more or less follows
+[the Nvidia documentation](https://docs.nvidia.com/doca/sdk/ovs-kernel+hardware+acceleration/index.html).
+
+### Step 2C1 Install the Nvidia ConnectX DOCA drivers (once per OS install)
+
+First, download the debian bookworm version of the driver and a required
+package from bookworm (that's no longer in debian trixie):
+
+```
+wget https://www.mellanox.com/downloads/DOCA/DOCA_v3.1.0/host/doca-host_3.1.0-091000-25.07-debian125_amd64.deb
+wget http://http.us.debian.org/debian/pool/main/libj/libjsoncpp/libjsoncpp25_1.9.5-4_amd64.deb
+```
+
+Next, install the packages
+
+```
+sudo dpkg -i libjsoncpp25_1.9.5-4_amd64.deb
+sudo dpkg -i doca-host_3.1.0-091000-25.07-debian125_amd64.deb
+sudo apt-get update
+sudo apt-get -y install doca-networking
+```
+
+Reload the new driver version.
+
+```
+sudo reboot
+#  Note: seems like the following should work instead, but I was still getting
+#  symbol errors in dmesg
+# sudo rmmod mlx5_fwctl mlx5_ib mlx5_core mlxdevm mlx_compat mlxfw
+# sudo modprobe mlx5_core
+```
+
+Make sure we have no VFs bound to the driver
+
+```
+echo '0' | sudo tee -a /sys/class/net/enp3s0f1np1/device/sriov_numvfs
+echo '0' | sudo tee -a /sys/class/net/enp3s0f0np0/device/sriov_numvfs
+```
+
+Switch the device into switchdev mode
+
+```
+sudo devlink dev eswitch set pci/0000:03:00.0 mode switchdev
+sudo devlink dev eswitch set pci/0000:03:00.1 mode switchdev
+```
+
+Set up a bond device using the linux kernel stack.
+
+```
+sudo ip link add dev bond0 type bond mode active-backup miimon 100
+sudo ip link set dev enp3s0f0np0 master bond0
+sudo ip link set dev enp3s0f1np1 master bond0
+sudo ip link set dev bond0 up
+sudo ip addr add 192.168.9.2/24 dev bond0
+```
+
+NB: you should wait until the LAG state is initialized ("active") before any
+VFs are bound, or the VF LAG offloading may fail.
+
+```
+while ! [ $(sudo cat /sys/kernel/debug/mlx5/0000:03:00.0/lag/state) == "active" ]; do printf .; sleep 1; done; echo
+```
+
+Now we can create some VFs, as needed
+
+```
+echo '2' | sudo tee -a /sys/class/net/enp3s0f0np0/device/sriov_numvfs
+```
+
+Next, start open-vswitch and enable hardware offload
+
+```
+sudo systemctl start openvswitch-switch.service
+sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
+sudo systemctl restart openvswitch-switch.service
+```
+
+Create an ovs bridge and add the bond and a VF representor interface
+
+```
+sudo ovs-vsctl add-br ovs-sriov
+sudo ovs-vsctl add-port ovs-sriov enp3s0f0r0
+```
+
+We could do VLAN tagging, but let's use a vxlan tunnel instead:
+
+```
+ovs-vsctl add-port ovs-sriov vxlan0 \
+    -- set interface vxlan0 type=vxlan \
+        options:local_ip=192.168.9.2 \
+        options:remote_ip=192.168.9.1 \
+        options:key=42
+```
+
+Optional: set up jumbo frames (e.g. 9000 bytes plus ~80 bytes for L2 headers
+from vxlan, geneve, or similar).  Note that we probably want to adjust the
+mtu of the vxlan subnet regardless to provide room for the vxlan headers.
+
+```
+sudo ip link set dev enp3s0f0np0 mtu 9080
+sudo ip link set dev enp3s0f1np1 mtu 9080
+sudo ip link set dev bond0 mtu 9080
+sudo ip link set dev enp3s0f0r0 mtu 9000
+```
+
+Set the bridge and representor to the up state
+
+```
+sudo ip link set dev ovs-sriov up
+sudo ip link set dev enp3s0f0r0 up
+```
+
+Next, we need to bind the VF to the vfio driver on the host. First, load the
+vfio driver and let it know that it should claim this type of device:
+
+```
+sudo modprobe vfio-pci
+echo $(cat /sys/bus/pci/devices/0000\:03\:00.2/{vendor,device}) \
+    | sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id
+```
+
+Unbind the VF from the mlx5 driver and rebind it to the vfio driver
+
+```
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+```
+
+Run qemu, using pci-passthrough for a VF. In this example, you can log in to
+the VM with root with a blank password.
+
+```
+if ! [ -f debian-13-nocloud-amd64-20250814-2204.qcow2 ]; then
+    wget https://cloud.debian.org/images/cloud/trixie/20250814-2204/debian-13-nocloud-amd64-20250814-2204.qcow2
+fi
+sudo qemu-system-x86_64 -accel kvm -nographic -m 8G -cpu host -smp 16 \
+    -drive file=debian-13-nocloud-amd64-20250814-2204.qcow2 \
+    -device vfio-pci,host=0000:03:00.2
+```
+
+In the VM, you can just configure this NIC as usual
+
+```
+sudo ip addr add dev ens4 192.168.10.2/24
+sudo ip link set dev ens4 up mtu 9000
+```
+
 ## Other possible approaches not used
-
-### Switchdev, tc-flower
-
-Switchdev and tc-flower seem like a promising kernel-supported method for
-hardware offloading.
-Unfortunately with this card, the debian 13 kernel/drivers, and the minimal
-tuning I was able to figure out it was not nearly as performant
-as the legacy pathway. Notes so far:
-
-  - Changing the switch mode via devlink from legacy to switchdev seems to
-    drop the number of channels from 32 to 1, which hurts performance (e.g.
-    iperf3 ~90 Gbps drops to ~30 Gbps). This can be fixed with ethtool, e.g.
-    ```
-    sudo ethtool -L enp3s0f0np0 combined 32
-    ```
-
-  - Even with that change I can't seem to get the kernel to offload any of the
-    tc rules to hardware. Although the NVIDIA documentation suggests this should
-    be possible, I tried a lot of things without success and the general
-    consensus in forums seems to be that you need a ConnectX 6 or newer for
-    this to work.  I could upgrade the NICs, but right now the costs seem to
-    outweigh the potential benefits.
-
-  - The tc flower rules are quite low level (e.g. they don't even implement
-    mac learning?) and would probably be much easier to use with a higher
-    level tool running on top (e.g. open vswitch).
-
 
 ### vDPA
 
@@ -362,3 +596,18 @@ like driver, basically by creating a standard interface for hardware to expose
 live-migration of VMs between machines even with NICs from different vendors.
 It sounds like it will be a great technology, but is not fully mature yet and
 will require newer hardware (e.g. a ConnectX 6) than what I have.
+
+### DOCA
+
+A proprietary NVIDIA interface that they state will be the only supported
+offloading interface for new functionality. Requires a ConnectX-6 or higher,
+so testing it was outside of the scope for this project.
+
+## Misc notes
+
+  - Changing the switch mode via devlink from legacy to switchdev seems to
+    drop the number of channels from 32 to 1, which hurts performance (e.g.
+    iperf3 ~90 Gbps drops to ~30 Gbps). This can be fixed with ethtool, e.g.
+    ```
+    sudo ethtool -L enp3s0f0np0 combined 32
+    ```
