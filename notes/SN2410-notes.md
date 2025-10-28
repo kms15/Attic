@@ -197,11 +197,25 @@ sudo apt-get install -y build-essential linux-source bc kmod cpio flex \
     libncurses-dev libelf-dev libssl-dev dwarves bison debhelper
 ```
 
-We can now build a new kernel
+We can now build a new kernel. (Note: this takes about 5 and a half hours on
+the switch).
 
 ```
 make clean
 time make -j $(nproc) bindeb-pkg
+```
+
+We can then install the new kernel using
+
+```
+dpkg -i ../linux-image-$(uname -r | cut -f1 -d+)_$(uname -r | cut -f1 -d+)-1_amd64.deb
+```
+
+Debian's grub setup seems to not reliably choose the new kernel by default.
+To work around this, we can manually uninstall the old kernel:
+
+```
+sudo DEBIAN_FRONTEND=noninteractive apt remove -y linux-image-$(uname -r | cut -f1 -d+)+deb13-amd64
 ```
 
 ## misc setup
@@ -210,4 +224,44 @@ Set the hostname
 
 ```
 sudo hostnamectl set-hostname phoebastria
+```
+
+## Example of a bridge with a VLAN
+
+We first create a bridge. Per [IPng's Network's notes], the ASIC documentation
+(which I have not found) specifies that the bridge MAC address needs to be set
+to the address of one of the ports in the bridge, so we use the MAC address
+from port enp3s0np49.
+
+```
+ip link add name br0 type bridge vlan_filtering 1
+ip link set dev br0 mtu 9216 up address \
+    $(ip link show enp3s0np49 | grep ether | sed "s/ \+/ /g" | cut -d ' ' -f 3)
+```
+
+Add two physical ports to the bridge:
+
+```
+ip link set dev enp3s0np49 master br0 mtu 9216 up
+ip link set dev enp3s0np51 master br0 mtu 9216 up
+```
+
+Change the VLAN for untagged traffic on those ports from (the default) VLAN 1
+to VLAN 80.
+
+```
+bridge vlan del vid 1 dev enp3s0np49
+bridge vlan del vid 1 dev enp3s0np51
+bridge vlan add vid 80 dev enp3s0np49 pvid untagged
+bridge vlan add vid 80 dev enp3s0np51 pvid untagged
+```
+
+It can also be useful for the switch to have a local interface attached to this
+VLAN (e.g. for routing), so we create one.
+
+```
+ip link add link br0 name br0.80 type vlan id 80
+bridge vlan add dev br0 vid 80 self
+ip link set br0.80 up mtu 9216
+ip addr add dev br0.80 192.168.80.1/24
 ```
