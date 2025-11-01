@@ -228,10 +228,15 @@ sudo hostnamectl set-hostname phoebastria
 
 ## Example of a bridge with a VLAN
 
-We first create a bridge. Per [IPng's Network's notes], the ASIC documentation
-(which I have not found) specifies that the bridge MAC address needs to be set
-to the address of one of the ports in the bridge, so we use the MAC address
-from port enp3s0np49.
+We first create a bridge. Per [the mellanox mlxsw wiki](
+https://github.com/Mellanox/mlxsw/wiki/Virtual-eXtensible-Local-Area-Network-%28VXLAN%29#vxlan-routing
+), the bridge MAC address needs to have the same MSB as the port mac addresses
+(or for simplicity, needs to be one of the port MAC addresses) for the routing
+offloads to work, but by default the bridge gets assigned the lowest MAC
+address of all of its slaves (which may be a randomly generated MAC address
+from something like a VxLAN device). The wiki thus recommends manually setting
+the bridge address to the address of one of the ports in the bridge, so we use
+the MAC address from port enp3s0np49.
 
 ```
 ip link add name br0 type bridge vlan_filtering 1
