@@ -200,57 +200,70 @@ for testing we'll just use hard-coded pre-shared keys.
 
 ```
 sudo ip xfrm state add \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    proto esp spi 0x00000003 reqid 0x00000003 mode transport \
+    src 192.168.80.2/24 \
+    dst 192.168.80.3/24 \
+    proto esp \
+    spi 0x00000003 \
+    reqid 0x00000011 \
+    mode transport \
     aead 'rfc4106(gcm(aes))' 0x20f01f80a26f633d85617465686c32552c92c42f 128 \
-    offload packet dev enp3s0f0np0 dir out sel \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    flag esn replay-window 64
+    offload packet \
+    dev enp3s0f0np0 \
+    dir out \
+    sel \
+        src 192.168.80.2/24 \
+        dst 192.168.80.3/24 \
+        flag esn # replay-window 64
 sudo ip xfrm state add \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    proto esp spi 0x00000007 reqid 0x00000007 mode transport \
+    src 192.168.80.3/24 \
+    dst 192.168.80.2/24 \
+    proto esp \
+    spi 0x00000007 \
+    reqid 0x000000013 \
+    mode transport \
     aead 'rfc4106(gcm(aes))' 0x6cb228189b4c6e82e66e46920a2cde39187de4ba 128 \
-    offload packet dev enp3s0f0np0 dir in sel \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    flag esn replay-window 64
+    offload packet \
+    dev enp3s0f0np0 \
+    dir in \
+    sel \
+        src 192.168.80.3/24 \
+        dst 192.168.80.2/24 \
+        flag esn \
+        replay-window 64
 sudo ip xfrm policy add \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    offload packet dev enp3s0f0np0 dir out tmpl \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    proto esp reqid 0x00000003 mode transport priority 12
+    src 192.168.80.2/24 \
+    dst 192.168.80.3/24 \
+    offload packet \
+    dev enp3s0f0np0 \
+    dir out \
+    tmpl \
+        src 192.168.80.2/24 \
+        dst 192.168.80.3/24 \
+        proto esp \
+        reqid 0x00000011 \
+        mode transport \
+        priority 12
 sudo ip xfrm policy add \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    offload packet dev enp3s0f0np0 dir in tmpl \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    proto esp reqid 0x00000007 mode transport priority 12
+    src 192.168.80.3/24 \
+    dst 192.168.80.2/24 \
+    offload packet \
+    dev enp3s0f0np0 \
+    dir in \
+    tmpl \
+        src 192.168.80.3/24 \
+        dst 192.168.80.2/24 \
+        proto esp \
+        reqid 0x00000013 \
+        mode transport \
+        priority 12
 ```
 
-Here's an example of what the other side of the link might look like (since
-there are a few things that would need to be changed):
-
-```
-sudo ip xfrm state add \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    proto esp spi 0x00000003 reqid 0x00000003 mode transport \
-    aead 'rfc4106(gcm(aes))' 0x20f01f80a26f633d85617465686c32552c92c42f 128 \
-    offload packet dev enp3s0f0np0 dir in sel \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    flag esn replay-window 64
-sudo ip xfrm state add \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    proto esp spi 0x00000007 reqid 0x00000007 mode transport \
-    aead 'rfc4106(gcm(aes))' 0x6cb228189b4c6e82e66e46920a2cde39187de4ba 128 \
-    offload packet dev enp3s0f0np0 dir out sel \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    flag esn replay-window 64
-sudo ip xfrm policy add \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    offload packet dev enp3s0f0np0 dir in tmpl \
-    src 192.168.80.2/24 dst 192.168.80.3/24 \
-    proto esp reqid 0x00000003 mode transport priority 12
-sudo ip xfrm policy add \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    offload packet dev enp3s0f0np0 dir out tmpl \
-    src 192.168.80.3/24 dst 192.168.80.2/24 \
-    proto esp reqid 0x00000007 mode transport priority 12
-```
+TODO: the first `ip xfrm policy` command seems to crash something (the
+mlx5_core driver?); specifically it outputs "killed", dmesg shows "BUG: unable
+to handle page fault for address: 0000000000005830", and all further ip xfrm
+commands will hang. The xfrm policy commands at
+[the example on the NVIDIA enterprise support site](
+https://enterprise-support.nvidia.com/s/article/ConnectX-6DX-Bluefield-2-IPsec-HW-Full-Offload-Configuration-Guide
+) do not seem to crash or hang, so these might work with some tweaking
+(maybe the offload packet lines need to be removed, with the offload packet
+only set with `echo full | sudo tee /sys/class/net/enp3s0f1np1/compat/devlink/ipsec_mode`?
