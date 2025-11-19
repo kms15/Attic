@@ -238,8 +238,12 @@ from something like a VxLAN device). The wiki thus recommends manually setting
 the bridge address to the address of one of the ports in the bridge, so we use
 the MAC address from port enp3s0np49.
 
+Note that Spanning Tree Protocol is off by default, leading to potential
+broadcast storms if you have any loops/cycles in your network. We turn it on
+for this example (which is safest in the general case).
+
 ```
-ip link add name br0 type bridge vlan_filtering 1
+ip link add name br0 type bridge vlan_filtering 1 stp_state 1
 ip link set dev br0 mtu 9216 up address \
     $(ip link show enp3s0np49 | grep ether | sed "s/ \+/ /g" | cut -d ' ' -f 3)
 ```
