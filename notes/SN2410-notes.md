@@ -270,3 +270,18 @@ bridge vlan add dev br0 vid 80 self
 ip link set br0.80 up mtu 9216
 ip addr add dev br0.80 192.168.80.1/24
 ```
+
+## RJ-45 adapter notes
+
+It appears that the various SFP28 ports [have different power limits](
+https://datacentersupport.lenovo.com/us/en/solutions/tt2699 ), with
+ports 1,2,47, and 48 able to support SFP adapters with power draws less than
+2.5W and ports 3-46 only able to support adapters with power draws less than
+1.5W. This limits where you can place higher power adapters like RJ-45 10G
+Base-T adapters.
+
+Experiments so far:
+- The ipolex ASF-10G2-T 10GBase-T adapter did not appear to work in any port.
+- The Flyfiber SFP-10G-T-C 10GBase-T adapter appears to work in the 2.5W ports
+  but not the 1.5W ports.
+- The 10Gtek ASF-GE-T 1000Base-T adapter appears to work in any port.
