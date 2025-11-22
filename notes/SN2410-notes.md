@@ -226,6 +226,74 @@ Set the hostname
 sudo hostnamectl set-hostname phoebastria
 ```
 
+## Rapid Spanning Tree Protocol
+
+If the network is connected in a way that there are loops (e.g. a ring),
+it can cause a number of problems such as broadcast packets looping endlessly.
+In LANs, that common solution to this is to automatically disable some of the
+links to break any cycles that exist. This is done by electing a root bridge
+and then building a spanning tree of active links from that bridge.
+Traditionally this was done with the [Spanning Tree Protocol (STP)](
+https://en.wikipedia.org/wiki/Spanning_Tree_Protocol#Rapid_Spanning_Tree_Protocol
+), but this protocol can take 30-50 seconds to recover from a switch failure or
+change in connections, so in modern LAN switches it has largely been replaced
+by a newer variation of the protocol known as the
+[Rapid Spanning Tree Protocol (RSTP)](
+https://en.wikipedia.org/wiki/Spanning_Tree_Protocol#Rapid_Spanning_Tree_Protocol
+), which can recover much more rapidly from changes (~6 seconds). There is also
+a further extension of this to make better use of redundant links to distribute
+traffic from multiple VLANs known as the [Multiple Spanning Tree Protocol
+(MSTP)]( https://en.wikipedia.org/wiki/Multiple_Spanning_Tree_Protocol ).
+
+Unfortunately the linux kernel only supports the older STP protocol,
+recommending that other protocols to be implemented in user space. The most
+popular user-space daemon for implementing RSTP and MSTP seems to be [mstpd](
+https://github.com/mstpd/mstpd/tree/master ), which is used by various linux
+distributions for switches such as the [DENT project]( https://dent.dev/ ) and
+and [Cumulus Linux](
+https://www.nvidia.com/en-us/networking/ethernet-switching/cumulus-linux/
+). Note that although this project supports RSTP on a standard linux bridge,
+due to (prior) limitations in the linux kernel bridge and VLAN implementations
+MSTP is only supported on specialized hardware switches (but [it looks like this
+may be fixed soon]( https://github.com/mstpd/mstpd/pull/150 ) ).
+
+Note that datacenter fabrics generally do not use MSTP, RSTP, or STP, instead
+using approaches such as avoiding cycles in L2 domains and distributing data
+across redundant L3 links using ECMP to address many of the same problems as
+the various STP protocols address.
+
+### Building mstpd
+
+Because mstpd is [not (yet) in the debian repositories](
+https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=767013 ), we will need to
+build it ourselves. As the latest official release does not include some [fixes
+for fast (65Gps+) network links](
+https://github.com/mstpd/mstpd/commit/20f1c93ec1b0fb9056c1770deadb88f57fb71024
+), we will build from the current development branch. First we install some
+prerequisites:
+
+```
+sudo apt-get install -y git build-essential autotools-dev autoconf automake libtool
+```
+
+We then clone the mstpd repository and build it
+
+```
+git clone https://github.com/mstpd/mstpd.git
+cd mstpd
+autoreconf --force --install
+./configure --with-systemdunitdir=/usr/lib/systemd/system
+make
+sudo make install
+```
+
+We then enable and start the service
+
+```
+sudo systemctl enable mstpd
+sudo systemctl start mstpd
+```
+
 ## Example of a bridge with a VLAN
 
 We first create a bridge. Per [the mellanox mlxsw wiki](
@@ -238,14 +306,16 @@ from something like a VxLAN device). The wiki thus recommends manually setting
 the bridge address to the address of one of the ports in the bridge, so we use
 the MAC address from port enp3s0np49.
 
-Note that Spanning Tree Protocol is off by default, leading to potential
-broadcast storms if you have any loops/cycles in your network. We turn it on
-for this example (which is safest in the general case).
+Note that STP (and RSTP) is off by default, leading to potential broadcast
+storms if you have any loops/cycles in your network. We thus enable STP on the
+bridge and then force mstpd daemon to use RSTP (rather than the default of
+MSTP, which is not yet considered production-ready on generic linux bridges).
 
 ```
 ip link add name br0 type bridge vlan_filtering 1 stp_state 1
 ip link set dev br0 mtu 9216 up address \
     $(ip link show enp3s0np49 | grep ether | sed "s/ \+/ /g" | cut -d ' ' -f 3)
+mstpctl setforcevers br0 rstp
 ```
 
 Add two physical ports to the bridge:
@@ -278,13 +348,31 @@ ip addr add dev br0.80 192.168.80.1/24
 ## RJ-45 adapter notes
 
 It appears that the various SFP28 ports [have different power limits](
-https://datacentersupport.lenovo.com/us/en/solutions/tt2699 ), with
+https://docs.nvidia.com/networking/display/sn2000pub/data+interfaces ), with
+the following limits:
+
+|    Ports        | Power limit |
+| :-------------: | :---------: |
+| 1, 2, 47, 48    |    2.5 W    |
+|     3 - 46      |    1.5 W    |
+| 49, 50, 55, 56  |     5 W     |
+|    51 - 54      |    3.5 W    |
+
 ports 1,2,47, and 48 able to support SFP adapters with power draws less than
 2.5W and ports 3-46 only able to support adapters with power draws less than
 1.5W. This limits where you can place higher power adapters like RJ-45 10G
 Base-T adapters.
 
-Experiments so far:
+Of note, the [SFF-8419 standard](
+file:///home/kms15/Downloads/PUBLISHED%20SFF-8419-1.PDF ) requires supporting
+modules that draw <= 1 W maximum (Power Level 1 modules) and describes optionally
+supporting high powered modules that draw <= 1.5W (power level 2) and <= 2 W
+(power level 3) modules. Thus it seems likely that the power budgets above
+were generous at the time the switch was released, and it's not surprising
+that a newer RJ45 adapter drawing 2.5 W to 3 W might not be supported on this
+older hardware.
+
+Some notes on adapters tried so far:
 - The ipolex ASF-10G2-T 10GBase-T adapter did not appear to work in any port.
 - The Flyfiber SFP-10G-T-C 10GBase-T adapter appears to work in the 2.5W ports
   but not the 1.5W ports.
