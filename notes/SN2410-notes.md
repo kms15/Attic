@@ -88,6 +88,7 @@ EOF
 
 Useful references:
  - [Debian on Mellanox SN2700](https://ipng.ch/s/articles/2023/11/11/debian-on-mellanox-sn2700-32x100g/)
+ - [Sysadmin-friendly ethernet switching (SN2100)](https://blog.benjojo.co.uk/post/sn2010-linux-hacking-switchdev
  - [Debian common kernel-related tasks](https://kernel-team.pages.debian.net/kernel-handbook/ch-common-tasks.html)
  - [Mellanox mlxsw wiki - installing a new kernel](https://github.com/Mellanox/mlxsw/wiki/Installing-a-New-Kerne)
 
@@ -215,7 +216,172 @@ Debian's grub setup seems to not reliably choose the new kernel by default.
 To work around this, we can manually uninstall the old kernel:
 
 ```
-sudo DEBIAN_FRONTEND=noninteractive apt remove -y linux-image-$(uname -r | cut -f1 -d+)+deb13-amd64
+sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y linux-image-$(uname -r | cut -f1 -d+)+deb13-amd64
+```
+
+## Updating the firmware
+
+Per the [mlxsw
+wiki](https://github.com/Mellanox/mlxsw/wiki/Supported-Hardware-And-Firmware),
+The minimum fully supported version of the ASIC firmware is 13.2010.1502 (at
+the time this was written), and the driver will refuse to load if the version
+is older than 13.2010.1006. The ASIC firmware version can be queried in
+multiple ways. If the driver was able to load you can query it using devlink:
+
+```
+sudo devlink dev info
+```
+
+Example output:
+
+```
+pci/0000:03:00.0:
+  driver mlxsw_spectrum
+  versions:
+      fixed:
+        hw.revision A1
+        fw.psid MT_2860113033
+      running:
+        fw.version 13.2010.3146
+        fw 13.2010.3146
+```
+
+If the driver has not been successfully loaded, you can still query the
+firmware version using the mstflint package:
+
+```
+sudo apt-get install -y mstflint # if needed
+sudo mstflint -d 03:00.0 query
+```
+
+Example output:
+
+```
+Image type:            FS3
+FW ISSU Version:       2
+FW Version:            13.2010.3146
+FW Release Date:       18.8.2022
+Description:           UID                GuidsNumber
+Base GUID:             900a8403004c03c0        128
+Base MAC:              900a844c03c0            128
+Image VSD:             N/A
+Device VSD:            N/A
+PSID:                  MT_2860113033
+Security Attributes:   N/A
+```
+
+There are at least three different ways to [update the ASIC
+firmware](https://github.com/Mellanox/mlxsw/wiki/Updating-Firmware), including
+an in-driver autoupdate, the `devlink dev flash` command, and the
+`mstfwmanager` command from the mstflint package. Unfortunately the in-driver
+autoupdate will not work with very old versions of firmware (and still only
+updates the firmware to an older-than-recommended version) and the `devlink`
+firmware update approach only works once the driver has been loaded
+successfully (which again is not possible with older driver versions), so
+we will follow the `mstfwmanager` approach.
+
+For reasons I do not yet understand, the debian trixie `mstflint` package
+does not include the `mstfwmanager` command (but does include the man page for
+it). We will thus build this tool ourselves from the upstream repository.
+Before starting, we uninstall the official debian mstflint package if it is
+installed.
+
+```
+sudo apt-get remove -y mstflint
+```
+
+We next install some build dependencies (note: apt-get install list probably
+could be reduced):
+
+```
+sudo apt-get install -y debhelper dkms libexpat1-dev libibmad-dev libibverbs-dev \
+    liblzma-dev libssl-dev pkg-config zlib1g-dev git build-essential \
+    autotools-dev autoconf automake libtool dh-dkms \
+    libcurl4-openssl-dev libxml2-dev
+```
+
+As with the kernel build, we will need more space than we have on the root
+drive so we mount the extra partition used for the kernel build and clone the
+mstflint repository there.
+
+```
+sudo mount /dev/sda2 /mnt
+cd /mnt
+git clone https://github.com/Mellanox/mstflint.git
+cd mstflint
+```
+
+If we try to build the source as-is, we'll get an error about the version
+numbers (x.x.x-1) not matching the expected version number format for a
+native debian package:
+
+```
+dpkg-source: error: can't build with source format '3.0 (native)': native package version may not have a revision
+```
+
+The easiest way to fix this is to trim off the revision numbers:
+
+```
+sed -i 's/^\(mstflint ([0-9]*\.[0-9]*\.[0-9]*\)-1)/\1)/g' debian/changelog
+```
+
+We can then build and install the package, specifying that we do want to build
+the firmware manager:
+
+```
+time DEB_CONFIGURE_EXTRA_FLAGS="--enable-fw-mgr" dpkg-buildpackage -uc -us
+sudo dpkg -i ../mstflint{,-dkms}_*.deb
+```
+The firmware files can be downloaded
+from the [Mellanox switchdev site](https://switchdev.mellanox.com/firmware/).
+According to [comments on the servethehome forums](
+https://forums.servethehome.com/index.php?threads/mellanox-switches-tips-tricks.39394/
+) it's possible to brick the switch if you update older firmware in large
+jumps. This might only be an issue when using the Onyx OS upgrades to update
+the switch, but I decided not to experiment and updated the firmware in
+multiple small jumps, including at least one of each minor build number (e.g.
+X in 13.X.Y). You can apply each update and reboot between them (required) as
+follows (replacing the version number as needed):
+
+```
+wget https://switchdev.mellanox.com/firmware/mlxsw_spectrum-13.2010.3146.mfa
+mstfwmanager -d 03:00.0 -i mlxsw_spectrum-13.2010.3146.mfa -f -u
+reboot
+```
+
+## Fan speed and noise levels
+
+With the default settings, this is not a quiet switch.
+Measuring from 3 feet away from the front of the switch, I measured ~75 dB
+(roughly as loud as a vacuum cleaner - not painful, but difficult to have a
+conversation over) on startup and before you have a working kernel driver,
+then about 50 dB ("moderate rainfall" or "typical home", where it's
+noticeable but you would not have to raise your voice to speak) once the
+driver loaded. My impression is that this is fine for a closet and tolerable
+(but not ideal) for an office.
+
+To control the fan speed we can use the lm-sensors package and fancontrol.
+The config file can be generated with the `pwmconfig` command, but
+unfortunately when I tried it the generated file required some manual
+fixes to get fancontrol to parse it. For this example we will thus
+manually generate the file.
+
+```
+cat << EOF | sudo tee /etc/fancontrol
+INTERVAL=10
+DEVPATH=hwmon1=devices/pci0000:00/0000:00:01.2/0000:03:00.0
+DEVNAME=hwmon1=mlxsw
+FCTEMPS=hwmon1/pwm1=hwmon1/temp1_input
+FCFANS= hwmon1/pwm1=hwmon1/fan8_input hwmon1/pwm1=hwmon1/fan7_input hwmon1/pwm1=hwmon1/fan6_input hwmon1/pwm1=hwmon1/fan5_input hwmon1/pwm1=hwmon1/fan4_input hwmon1/pwm1=hwmon1/fan3_input hwmon1/pwm1=hwmon1/fan2_input hwmon1/pwm1=hwmon1/fan1_input
+MINTEMP=hwmon1/pwm1=40
+MAXTEMP=hwmon1/pwm1=60
+MINSTART=hwmon1/pwm1=150
+MINSTOP=hwmon1/pwm1=0
+EOF
+
+sudo apt-get install -y lm-sensors fancontrol
+sudo systemctl start fancontrol
+sudo systemctl enable fancontrol
 ```
 
 ## misc setup
@@ -223,7 +389,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt remove -y linux-image-$(uname -r | cut -
 Set the hostname
 
 ```
-sudo hostnamectl set-hostname phoebastria
+sudo hostnamectl set-hostname armillaria
 ```
 
 ## Rapid Spanning Tree Protocol
