@@ -511,6 +511,75 @@ ip link set br0.80 up mtu 9216
 ip addr add dev br0.80 192.168.80.1/24
 ```
 
+## Configuring the switch on startup
+
+By default, systemd will try to do some autoconfiguration of the switch ports
+(e.g. set them "up" by default), but these default actions can get in the way
+when you're trying to do more complex network configuration. Luckily systemd
+[provides a way to disable these default actions](
+https://www.freedesktop.org/software/systemd/man/latest/systemd.network.html
+)
+
+```
+cat <<EOF | sudo tee /etc/systemd/network/10-mlxsw_spectrum.network
+[Match]
+Driver=mlxsw_spectrum
+
+[Link]
+Unmanaged=yes
+EOF
+```
+
+We can then write a script to configure the ports on startup (in this case
+putting all of the ports on the same bridge in the same vlan, like we would
+have in an unmanaged switch):
+
+```
+cat <<EOF | sudo tee /usr/local/sbin/configure-switch
+#!/bin/bash
+
+# create the bridge
+ip link add name br0 type bridge vlan_filtering 1 stp_state 1
+ip link set dev br0 mtu 9216 up address \
+    \$(ip link show enp3s0np1 | grep ether | sed "s/ \+/ /g" | cut -d ' ' -f 3)
+mstpctl setforcevers br0 rstp
+
+# add all of the switch ports to the bridge
+switch_interfaces=\$(ls -1d /sys/class/net/enp3s0np* | cut -f5 -d/ )
+for interface in \$switch_interfaces ; do
+    ip link set dev \$interface master br0 mtu 9216 up
+done
+EOF
+
+chmod +x /usr/local/sbin/configure-switch
+```
+
+Finally, we can create a systemd unit to run the switch configuration script on
+startup.
+
+```
+cat <<EOF | sudo tee /etc/systemd/system/configure-switch.service
+[Unit]
+Description=Initialize the physical network bridge and its ports
+After=mstpd.service
+Wants=mstpd.service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/configure-switch
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable configure-switch.service
+sudo systemctl start configure-switch.service
+```
+
 ## RJ-45 adapter notes
 
 It appears that the various SFP28 ports [have different power limits](
