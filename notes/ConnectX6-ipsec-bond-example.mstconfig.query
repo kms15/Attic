@@ -27,7 +27,7 @@ Configurations:                                          Next Boot
         STRICT_VF_MSIX_NUM                          False(0)            
         VF_NODNIC_ENABLE                            False(0)            
         NUM_PF_MSIX_VALID                           True(1)             
-        NUM_OF_VFS                                  8                   
+        NUM_OF_VFS                                  16                  
         NUM_OF_PF                                   2                   
         PF_BAR2_ENABLE                              False(0)            
         SRIOV_EN                                    True(1)             
