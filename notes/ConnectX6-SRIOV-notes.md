@@ -16,23 +16,134 @@ intra-VM traffic.
     but don't disclose the actual limit (directing the reader to contact their
     Nvidia representative. In my tests with tunneled vxlan ipsec3 traffic and
     9000 byte (overlay) mtu, the maximum ipsec encryption/decryption speed
-    seems to be 5 very consistent *57.4 Gb/s* in each direction. While this
+    seems to be a very consistent *57.4 Gb/s* in each direction. While this
     isn't true line-rate encryption, it's probably close enough for my current
     use-case (and upgrading to a ConnectX-7 would fix this if needed).
-
   - It appears that ipsec offloading [is not currently supported over bonds
-    (e.g. VF-LAG)](
+    (e.g. LCAP) except in an active-backup configuration](
     https://forums.developer.nvidia.com/t/bluefield-2-or-connectx-6-dx-crypto-enable-bonding-lacp-ipsec/341359
-    ), except possibly in an active-backup configuration (although I've
-    so far been unable to get even this configuration to work). This may
-    create problems for RoCE fail-over scenarios.
+    ). This is probably good enough for my use case, since the active-backup
+    configuration supports high-availability and I'm unlikely to need the
+    additional bandwidth of an active-active configuration in the short term,
+    but hopefully full LCAP support will eventually arrive.
+  - RoCEv2 traffic is not routed by the linux kernel; thus failover between
+    links requires bonding at the driver level.
+  - There are quite a few firmware options on the ConnectX-6 Dx with often
+    limited public documentation on what they do, but setting them incorrectly
+    can lead to particular features failing or poor performance.
+
+## Approaches to redundancy considered:
+
+### L3 routing with ECMP across the two ports
+
+In this scenario the routing software determines which links provide valid
+paths for packets and (if both links are valid) a hash (e.g. of source and
+destination ips and ports) is used to determine which link to send a pack
+along.
+
+Advantages:
+
+  - Can use the full bandwidth of both links
+  - Can use global routing information to make smart decisions about the best
+    link to use (e.g. choose the port connected to the upstream switch with the
+    shortest path to the destination)
+  - Assuming L3 ECMP is also being used for connections between switches,
+    allows a single unified approach for the entire route between two
+    virtual machines, simplifying monitoring and debugging of the routes
+    taken by packets.
+  - Potential sub-second failover when a link or switch goes down.
+  - Requires only basic L3 routing support on upstream switches.
+
+Disadvantages:
+
+  - Doesn't support RoCEv2 failover between links if routing is managed by
+    the host (true by definition with a typical smart NIC like the
+    ConnectX, but not neccesarily true with a DPU like a Bluefield card).
+  - Because ipsec offload is attached to an individual port of the network
+    card on the current ConnectX cards, you would potentially need four
+    separate ipsec connections for each pair of hosts (one for each
+    combination of incoming and outgoing ports) and more complicated
+    routing rules to make sure that the traffic going over each physical
+    connection was correctly mapped to the ips for that connection.
+    Again, it appears that using DOCA flows on the Bluefield DPU (and
+    possibly similar approaches on other DPUs) ipsec offloading can be
+    configured in a way that is not tied to the port.
+  - Requires multi-port eswitch support, which may have additional limitations
+    (I've only found a small amount of documentation for using it with DDPK,
+    and have not confirmed that it functions as expected with switchdev and
+    tc flower).
+
+My impression overall is using ECMP for redundancy is a great option for
+cases like a typical contemporary cloud server when you don't have to
+worry about local RoCEv2 connections or ipsec offloading or when using a
+high-end DPU which can handle these two cases, but is not a great solution
+otherwise.
+
+### Bonded LCAP (802.3ad) with ESI-LAG on the upstream switches
+
+For this approach, the host network card is configured as a standard linux
+bond in an active-active configuration where the outgoing port for a packet is
+chosen based on a hash of the header (e.g. of source and destination ports and
+ips) with standards-defined protocol messages used to monitor the health of
+each connection. While the protocol itself is written assuming that there is
+a single machine on each side of the pair of links rather than two separate
+switches, but using the (vendor neutral) ESI-LAG or a proprietary MLAG/MCLAG
+implementation those two switches can be made to look like a single upstream
+device for the purposes of a network bond.
+
+Advantages:
+
+  - Can use the full bandwidth of both links.
+  - Natively supports RoCEv2 (via RoCEv2 LAG), using both links.
+
+Disadvantages:
+
+  - No ipsec offloading support (yet)
+  - Requires higher-end offloading on upstream switches (ESI-LAG and/or MLAG).
+  - Does not use global routing information to choose outbound port, so may
+    make inefficient choices when the two paths are not equivalent (e.g. if a
+    link failure occurs on the destination server).
+  - Potential sub-second failover when a link or switch goes down.
+
+My impression is that LCAP + ESI-LAG is a good option if ipsec is not needed,
+but not an option if ipsec offload is needed (until driver support is added).
+
+### Active-backup bond
+
+For this approach, the upstream ports are bonded in an active-backup mode (so
+if the link fails to one upstream switch it will automatically fail-over to the
+other).
+
+Advantages:
+
+  - Full RoCEv2 support
+  - Full ipsec offloading support
+  - Minimal requirements from upstream switches
+  - Requires only basic L3 routing support on upstream switches.
+
+Disadvantages:
+
+  - Only utilizes one of the two links at a time (which may not be the closest
+    link to the destination).
+  - Failing over to the backup link requires establishing a new BGP session,
+    which will often take more than 1 second even with aggressive tuning.
+    A multi-hop "warm" spare setup may be possible to reduce this time.
+
+My overall impression is that this is a practical approach that will support
+RoCEv2 and ipsec offloads while still coming within a factor of 2 of the
+fastest approaches.
+
 
 ## Materials and Methods
 
 ### Hardware
 
 Two machines each with Epyc 4545P processors and ConnectX-6 Dx cards
-(MCX623106AC) in x8 PCIe slots.
+(MCX623106AC) in x8 PCIe slots with 100 Gb/s optics (note that the x8 PCIe 4
+connection will limit maximum bandwidth to ~100 Gb/s). You can find [ the
+firmware settings used for the ConnectX-6 Dx cards here](
+./ConnectX6-ipsec-bond-example.mstconfig.query ), as reported by
+`sudo mstconfig --dev 03:00.0 query`.
 
 ### Software stack used
 
@@ -77,9 +188,49 @@ ping -fc 10000 192.168.10.1
 
 ### Step 0 (once per OS-install) install prerequisites
 
+Install a few common debian packages used in this example
+
 ```
-sudo apt install mstflint wget qemu-system-x86
+sudo apt install -y mstflint wget qemu-system-x86 \
+    openvswitch-switch openvswitch-vtep \
+    openvswitch-ipsec strongswan-starter
 ```
+
+You will also need to locate and download the [latest versions of the DOCA-OFED
+drivers](https://developer.nvidia.com/doca-downloads).
+
+```
+wget https://www.mellanox.com/downloads/DOCA/DOCA_v3.2.1/host/doca-host_3.2.1-044000-25.10-debian13_amd64.deb
+```
+
+Unfortunately the DOCA 3.2.1 drivers seem to have compatibility problems with
+newer kernel versions (6.12.48 works, 6.12.57 does not), so you may have to
+pin an older kernel version using something like the following:
+
+```
+cat << EOF | sudo tee /etc/apt/preferences.d/pin-kernel.pref
+Package: linux-image-amd64
+Pin: version 6.12.48-1
+Pin-Priority: 990
+
+Package: linux-headers-amd64
+Pin: version 6.12.48-1
+Pin-Priority: 990
+EOF
+```
+
+You may also need to manually roll back the kernel packages to this version
+using a tool such as aptitude.
+
+With a compatible kernel version, you can then install the DOCA-OFED drivers,
+e.g.
+
+```
+sudo dpkg -i doca-host_3.2.1-044000-25.10-debian13_amd64.deb
+sudo apt-get update
+sudo apt-get -y install doca-ofed
+```
+
 
 ### Step 1 (once per NIC) update firmware and max SR-IOV devices
 
@@ -99,14 +250,14 @@ Find and download the
 [latest matching firmware](https://network.nvidia.com/support/firmware/connectx6dx/)
 
 ```
-wget https://www.mellanox.com/downloads/firmware/fw-ConnectX6Dx-rel-22_43_8002-MCX623106AC-CDA_Ax-UEFI-14.37.50-FlexBoot-3.7.500.signed.bin.zip
-unzip fw-ConnectX6Dx-rel-22_43_8002-MCX623106AC-CDA_Ax-UEFI-14.37.50-FlexBoot-3.7.500.signed.bin.zip
+wget https://www.mellanox.com/downloads/firmware/fw-ConnectX6Dx-rel-22_47_1088-MCX623106AC-CDA_Ax-UEFI-14.40.10-FlexBoot-3.8.201.signed.bin.zip
+unzip fw-ConnectX6Dx-rel-22_47_1088-MCX623106AC-CDA_Ax-UEFI-14.40.10-FlexBoot-3.8.201.signed.bin.zip
 ```
 
 Install the firmware and reboot the card with the new firmware
 
 ```
-sudo mstflint --dev 03:00.0 -i fw-ConnectX6Dx-rel-22_43_8002-MCX623106AC-CDA_Ax-UEFI-14.37.50-FlexBoot-3.7.500.signed.bin burn
+sudo mstflint --dev 03:00.0 -i fw-ConnectX6Dx-rel-22_47_1088-MCX623106AC-CDA_Ax-UEFI-14.40.10-FlexBoot-3.8.201.signed.bin burn
 sudo mstfwreset --dev 03:00.0 reset
 ```
 
@@ -114,13 +265,10 @@ Confirm ipsec acceleration is available:
 
 Example of a working card:
 ```
-$ sudo ethtool -k enp3s0f0np0 | grep "esp\|tls"
+$ sudo ethtool -k enp3s0f0np0 | grep esp
 tx-esp-segmentation: on
 esp-hw-offload: on [fixed]
 esp-tx-csum-hw-offload: on [fixed]
-tls-hw-tx-offload: on
-tls-hw-rx-offload: off
-tls-hw-record: off [fixed]
 $ sudo dmesg | grep -i ipsec
 [   10.065419] mlx5_core 0000:03:00.0: mlx5e: IPSec ESP acceleration enabled
 [   10.857570] mlx5_core 0000:03:00.1: mlx5e: IPSec ESP acceleration enabled
@@ -129,13 +277,10 @@ $ sudo dmesg | grep -i ipsec
 Example of a non-working card:
 
 ```
-$ sudo ethtool -k enp3s0f0np0 | grep "esp\|tls"
+$ sudo ethtool -k enp3s0f0np0 | grep esp
 tx-esp-segmentation: off [fixed]
 esp-hw-offload: off [fixed]
 esp-tx-csum-hw-offload: off [fixed]
-tls-hw-tx-offload: off [fixed]
-tls-hw-rx-offload: off [fixed]
-tls-hw-record: off [fixed]
 $ sudo dmesg | grep -i ipsec
 ```
 
@@ -164,82 +309,92 @@ Reboot the system to set up the new PCIe BAR, etc. for SR-IOV
 sudo reboot
 ```
 
-# ipsec approach #1
-
-For this approach, we will loosely follow the example in [the NVIDIA OFED
-documents](
-https://docs.nvidia.com/networking/display/mlnxofedv24010331/ipsec+full+offload
-) to set up an ipsec encrypted connection between two VFs.
-
-WIP: This seems to be a working example for the single PF case, but does
-not yet handle the bonding/failover case.
+### Step 2: setup Switchdev and an active-backup bond
+We first declare some variables to make it easier to keep track of
+(potentially) machine-specific details such as ip addresses and the bus address
+of the network card:
 
 ```
-#!/bin/bash
+PF0=enp3s0f0np0 # netdev name of the first port (physical function = PF) on the NIC
+PF1=enp3s0f1np1 # netdev name of the second port on the NIC
+VF=enp3s0f0v0   # netdev name of the virtual function (VF) we will use for the VM
+REPRESENTOR=enp3s0f0r0 # representor interface corresponding to the VF above
+PF0_BUSID=pci/0000:03:00.0 # Bus ID of PF0
+PF1_BUSID=pci/0000:03:00.1 # Bus ID of PF1
+LOCAL_BOND_IP=192.168.70.2 # the underlay address of the NIC's bond
+LOCAL_VTEP_IP=192.168.80.2 # the underlay address that will be used for the vxlan
+LOCAL_VF_IP=192.168.90.2 # the overlay address that will be used for the VM
+REMOTE_BOND_IP=192.168.70.3 # the underlay address of the remote machine
+REMOTE_VTEP_IP=192.168.80.3 # the underlay address of the remote vxlan
+REMOTE_VF_IP=192.168.90.3 # the overlay address of the remote VM
+```
 
-set -xeuo pipefail
+Next we make sure we're starting from a clean slate by flushing any existing
+ipsec policies or state associations, deleting any existing bond0 interface,
+and setting the network ports to the "down" state.
 
-ENABLE_IPSEC=true
+```
+sudo ip xfrm state flush
+sudo ip xfrm policy flush
+sudo ip link delete bond0 || true
+sudo ip link set ${PF0} down
+sudo ip link set ${PF1} down
+```
 
-case $(hostname) in
+Ipsec offloading requires that driver use the firmware to create hardware
+rules on the NIC (known as [device managed flow steering, or DMFS](
+https://docs.kernel.org/next/networking/device_drivers/ethernet/mellanox/mlx5/devlink.html#flow-steering-mode-device-flow-steering-mode
+) ) and that the device be in switchdev mode. Before we can change these,
+however, we need to make sure that no VFs are bound by the driver.
+A simple way to do this is to set the number of VFs to 0 while we are making
+these changes.
 
-        aratinga)
-                PF=enp3s0f0np0
-                VF=enp3s0f0v0
-                REPRESENTOR=enp3s0f0r0
-                PF_BUSID=pci/0000:03:00.0
-                LOCAL_VTEP_IP=192.168.80.2
-                LOCAL_VF_IP=192.168.90.2
-                REMOTE_VTEP_IP=192.168.80.3
-                REMOTE_VF_IP=192.168.90.3
-                PSK_OUT=0x20f01f80a26f633d85617465686c32552c92c42f
-                PSK_IN=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
-                REQID_OUT=0x00000011
-                REQID_IN=0x00000013
-                SPI_OUT=0x00000003
-                SPI_IN=0x00000007
-                ;;
+```
+echo '0' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
+echo '0' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
+```
 
-        pyrrhura)
-                PF=enp3s0f0np0
-                VF=enp3s0f0v0
-                REPRESENTOR=enp3s0f0r0
-                PF_BUSID=pci/0000:03:00.0
-                LOCAL_VTEP_IP=192.168.80.3
-                LOCAL_VF_IP=192.168.90.3
-                REMOTE_VTEP_IP=192.168.80.2
-                REMOTE_VF_IP=192.168.90.2
-                PSK_OUT=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
-                PSK_IN=0x20f01f80a26f633d85617465686c32552c92c42f
-                REQID_OUT=0x00000013
-                REQID_IN=0x00000011
-                SPI_OUT=0x00000007
-                SPI_IN=0x00000003
-                ;;
+We can then make sure the NIC is in legacy mode, set these flow steering mode,
+and switch it to switchdev mode.
 
-        *)
-                echo "unrecognized hostname \"$(hostname)\" -  please edit $0" \
-                        "to add hostname and ip addresses" 1>&2
-                exit 1
-                ;;
-esac
+```
+sudo devlink dev eswitch set ${PF0_BUSID} mode legacy
+sudo devlink dev eswitch set ${PF1_BUSID} mode legacy
+sudo devlink dev param set ${PF0_BUSID} name flow_steering_mode value dmfs cmode runtime
+sudo devlink dev param set ${PF1_BUSID} name flow_steering_mode value dmfs cmode runtime
+sudo devlink dev eswitch set ${PF0_BUSID} mode switchdev
+sudo devlink dev eswitch set ${PF1_BUSID} mode switchdev
+```
 
-if $ENABLE_IPSEC; then
-        sudo ip xfrm state flush
-        sudo ip xfrm policy flush
-fi
+Now we can re-create some VFs (two per PF in this example)
 
-echo '0' | sudo tee -a /sys/class/net/${PF}/device/sriov_numvfs
-sudo devlink dev eswitch set ${PF_BUSID} mode legacy
-sudo devlink dev param set ${PF_BUSID} name flow_steering_mode value dmfs cmode runtime
-if $ENABLE_IPSEC; then
-        echo full | sudo tee /sys/class/net/${PF}/compat/devlink/ipsec_mode
-fi
-sudo devlink dev eswitch set ${PF_BUSID} mode switchdev
-echo '2' | sudo tee -a /sys/class/net/${PF}/device/sriov_numvfs
+```
+echo '2' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
+echo '2' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
+```
 
-sudo ip addr replace ${LOCAL_VTEP_IP}/24 dev ${PF}
-sudo ip link set dev ${PF} mtu 9216 up
+Next we create the bond interface and add the two PFs to the bond
+
+```
+sudo ip link add dev bond0 type bond mode active-backup miimon 100
+sudo ip link set dev ${PF0} master bond0
+sudo ip link set dev ${PF1} master bond0
+```
+
+We also make sure that the ipsec offloads are enabled for the bond
+
+```
+sudo ethtool --offload bond0 esp-hw-offload on
+sudo ethtool --offload bond0 esp-tx-csum-hw-offload on
+```
+
+For this example we'll use
+
+```
+sudo ip addr replace ${LOCAL_BOND_IP}/24 dev bond0
+sudo ip link set dev ${PF0} mtu 9216 up
+sudo ip link set dev ${PF1} mtu 9216 up
+sudo ip link set dev bond0 mtu 9216 up
 
 sudo ip link set ${REPRESENTOR} mtu 9000 up
 
@@ -249,76 +404,64 @@ sudo ip netns exec ns0 ip addr replace dev ${VF} ${LOCAL_VF_IP}/24
 sudo ip netns exec ns0 ip link set dev ${VF} mtu 9000 up
 
 if $ENABLE_IPSEC; then
-        sudo ip xfrm state add \
-            src ${LOCAL_VTEP_IP}/24 \
-            dst ${REMOTE_VTEP_IP}/24 \
-            proto esp \
-            spi ${SPI_OUT} \
-            reqid ${REQID_OUT} \
-            mode transport \
-            aead 'rfc4106(gcm(aes))' ${PSK_OUT} 128 \
-            offload packet \
-            dev ${PF} dir out \
-            sel \
-                src ${LOCAL_VTEP_IP} \
-                dst ${REMOTE_VTEP_IP} \
-                flag esn \
-                # replay-window 64
-        sudo ip xfrm state add \
-            src ${REMOTE_VTEP_IP}/24 \
-            dst ${LOCAL_VTEP_IP}/24 \
-            proto esp \
-            spi ${SPI_IN} \
-            reqid ${REQID_IN} \
-            mode transport \
-            aead 'rfc4106(gcm(aes))' ${PSK_IN} 128 \
-            offload packet dev ${PF} dir in \
-            sel \
-                src ${REMOTE_VTEP_IP} \
-                dst ${LOCAL_VTEP_IP} \
-                flag esn \
-                replay-window 64
-        sudo ip xfrm policy add \
+
+	sudo ip xfrm state add \
+	    src ${LOCAL_VTEP_IP}/24 \
+	    dst ${REMOTE_VTEP_IP}/24 \
+	    proto esp \
+	    spi ${SPI_OUT} \
+	    reqid ${REQID_OUT} \
+	    mode transport \
+	    aead 'rfc4106(gcm(aes))' ${PSK_OUT} 128 \
+	    offload packet dev ${PF0} dir out \
+	    sel \
             src ${LOCAL_VTEP_IP} \
             dst ${REMOTE_VTEP_IP} \
-            offload packet dev ${PF} \
-            dir out \
-            tmpl \
-                src ${LOCAL_VTEP_IP}/24 \
-                dst ${REMOTE_VTEP_IP}/24 \
-                proto esp \
-                reqid ${REQID_OUT} \
-                mode transport \
-                priority 12
-        sudo ip xfrm policy add \
+            flag esn \
+            # replay-window 64
+	sudo ip xfrm state add \
+	    src ${REMOTE_VTEP_IP}/24 \
+	    dst ${LOCAL_VTEP_IP}/24 \
+	    proto esp \
+	    spi ${SPI_IN} \
+	    reqid ${REQID_IN} \
+	    mode transport \
+	    aead 'rfc4106(gcm(aes))' ${PSK_IN} 128 \
+	    offload packet dev ${PF0} dir in \
+	    sel \
             src ${REMOTE_VTEP_IP} \
             dst ${LOCAL_VTEP_IP} \
-            offload packet dev ${PF} \
-            dir in \
-            tmpl \
-                src ${REMOTE_VTEP_IP}/24 \
-                dst ${LOCAL_VTEP_IP}/24 \
-                proto esp \
-                reqid ${REQID_IN} \
-                mode transport \
-                priority 12
-#       sudo ip xfrm policy add \
-#           src ${REMOTE_VTEP_IP} \
-#           dst ${LOCAL_VTEP_IP} \
-#           dir fwd \
-#           tmpl \
-#               src ${REMOTE_VTEP_IP}/24 \
-#               dst ${LOCAL_VTEP_IP}/24 \
-#               proto esp \
-#               reqid ${REQID_IN} \
-#               mode transport \
-#               priority 12
+            flag esn \
+            replay-window 64
+	sudo ip xfrm policy add \
+	    src ${LOCAL_VTEP_IP} \
+	    dst ${REMOTE_VTEP_IP} \
+	    offload packet dev ${PF0} \
+	    dir out \
+	    tmpl \
+		src ${LOCAL_VTEP_IP}/24 \
+		dst ${REMOTE_VTEP_IP}/24 \
+		proto esp \
+            reqid ${REQID_OUT} \
+            mode transport \
+            priority 12
+	sudo ip xfrm policy add \
+	    src ${REMOTE_VTEP_IP} \
+	    dst ${LOCAL_VTEP_IP} \
+	    offload packet dev ${PF0} \
+	    dir in \
+	    tmpl \
+		src ${REMOTE_VTEP_IP}/24 \
+		dst ${LOCAL_VTEP_IP}/24 \
+		proto esp \
+            reqid ${REQID_IN} \
+            mode transport \
+            priority 12
 fi
 
-sudo apt install -y openvswitch-switch openvswitch-vtep
-if $ENABLE_IPSEC; then
-        sudo apt install -y openvswitch-ipsec strongswan-starter
-fi
+sudo ip addr replace ${LOCAL_VTEP_IP}/32 dev lo
+sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
+
 sudo ovs-vsctl del-br br-ovs || true
 sudo ovs-vsctl add-br br-ovs
 sudo ovs-vsctl add-port br-ovs ${REPRESENTOR}
@@ -328,10 +471,22 @@ sudo ovs-vsctl add-port br-ovs vxlan1 \
     options:remote_ip=${REMOTE_VTEP_IP} \
     options:key=1024 \
     options:dst_port=4789
+
 ```
 
+### Step 3a: ipsec using low-level ip xfrm interface and pre-shared key
+
+```
+LOCAL_VTEP_IP=192.168.80.2
+LOCAL_VF_IP=192.168.90.2
+REMOTE_VTEP_IP=192.168.80.3
+REMOTE_VF_IP=192.168.90.3
+```
+
+### Step 4: VM setup
+
 One check that the traffic is encrypted is by looking at the number of bytes
-and packets with either ethtool:
+and packets with either ethtool on the host machine:
 
 ```
 sudo ethtool -S enp3s0f0np0 | grep ipsec
