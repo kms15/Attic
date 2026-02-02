@@ -13,8 +13,10 @@ case $(hostname) in
 		REPRESENTOR=enp3s0f0r0 
 		PF0_BUSID=pci/0000:03:00.0
 		PF1_BUSID=pci/0000:03:00.1
+		LOCAL_BOND_IP=192.168.70.2
 		LOCAL_VTEP_IP=192.168.80.2
 		LOCAL_VF_IP=192.168.90.2
+		REMOTE_BOND_IP=192.168.70.3
 		REMOTE_VTEP_IP=192.168.80.3
 		REMOTE_VF_IP=192.168.90.3
 		PSK_OUT=0x20f01f80a26f633d85617465686c32552c92c42f
@@ -32,8 +34,10 @@ case $(hostname) in
 		REPRESENTOR=enp3s0f0r0 
 		PF0_BUSID=pci/0000:03:00.0
 		PF1_BUSID=pci/0000:03:00.1
+		LOCAL_BOND_IP=192.168.70.3
 		LOCAL_VTEP_IP=192.168.80.3
 		LOCAL_VF_IP=192.168.90.3
+		REMOTE_BOND_IP=192.168.70.2
 		REMOTE_VTEP_IP=192.168.80.2
 		REMOTE_VF_IP=192.168.90.2
 		PSK_OUT=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
@@ -71,10 +75,6 @@ sudo devlink dev eswitch set ${PF0_BUSID} mode legacy
 sudo devlink dev eswitch set ${PF1_BUSID} mode legacy
 sudo devlink dev param set ${PF0_BUSID} name flow_steering_mode value dmfs cmode runtime
 sudo devlink dev param set ${PF1_BUSID} name flow_steering_mode value dmfs cmode runtime
-if $ENABLE_IPSEC; then
-	echo full | sudo tee /sys/class/net/${PF0}/compat/devlink/ipsec_mode
-	echo full | sudo tee /sys/class/net/${PF1}/compat/devlink/ipsec_mode
-fi
 sudo devlink dev eswitch set ${PF0_BUSID} mode switchdev
 sudo devlink dev eswitch set ${PF1_BUSID} mode switchdev
 echo '2' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
@@ -86,7 +86,7 @@ sudo ip link set dev ${PF1} master bond0
 sudo ethtool --offload bond0 esp-hw-offload on
 sudo ethtool --offload bond0 esp-tx-csum-hw-offload on
 
-sudo ip addr replace ${LOCAL_VTEP_IP}/24 dev bond0
+sudo ip addr replace ${LOCAL_BOND_IP}/24 dev bond0
 sudo ip link set dev ${PF0} mtu 9216 up
 sudo ip link set dev ${PF1} mtu 9216 up
 sudo ip link set dev bond0 mtu 9216 up
@@ -154,6 +154,9 @@ if $ENABLE_IPSEC; then
 		priority 12
 fi
 
+sudo ip addr replace ${LOCAL_VTEP_IP}/32 dev lo
+sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
+
 sudo ovs-vsctl del-br br-ovs || true
 sudo ovs-vsctl add-br br-ovs
 sudo ovs-vsctl add-port br-ovs ${REPRESENTOR}
@@ -163,4 +166,3 @@ sudo ovs-vsctl add-port br-ovs vxlan1 \
     options:remote_ip=${REMOTE_VTEP_IP} \
     options:key=1024 \
     options:dst_port=4789
-
