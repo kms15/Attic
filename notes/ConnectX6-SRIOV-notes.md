@@ -161,7 +161,7 @@ was run 3 times and the median of the 6 values recorded. Here is an example
 command with 2 threads:
 
 ```
-iperf3 --parallel 2 --bidi --client 192.168.10.1
+iperf3 --parallel 2 --bidi --client 192.168.90.3
 ```
 
 The latency for each approach was measured using a flood ping, with one warm up
@@ -169,20 +169,26 @@ run (to initialize the flows) followed by three more runs, with the median
 recorded.
 
 ```
-ping -fc 10000 192.168.10.1
+ping -fc 10000 192.168.90.3
 ```
 
 ## Results
 
-| Approach                 | iperf3/1500/2 (Gb/s) | iperf3/9000/2 (Gb/s) | iperf3/9000/6 (Gb/s) | ping mean (us) | ping mdev (us) |
-| ------------------------ | -------------------- | -------------------- | -------------------- | -------------- | -------------- |
-| ovs/tc + VXLAN           |        TBD           |         TBD          |          TBD         |       TBD      |      TBD       |
-| ovs/tc + VXLAN + ipsec   |        TBD           |         TBD          |          TBD         |       TBD      |      TBD       |
+| Approach                         | iperf3/1500/2 (Gb/s) | iperf3/9000/2 (Gb/s) | iperf3/9000/6 (Gb/s) | ping mean (us) |
+| -------------------------------- | -------------------- | -------------------- | -------------------- | -------------- |
+| host-to-host, legacy             |        77            |         96           |          87          |       30       |
+| host-to-host + cpu ipsec         |         8            |         22           |          17          |       32       |
+| VM-VM ovs + VXLAN                |         5            |         14           |          12          |       73       |
+| VM-VM ovs/tc + VXLAN             |        60            |         79           |          97          |       31       |
+| VM-VM ovs/tc + VXLAN + NIC ipsec |        54            |         57.3         |          57.4        |       33       |
 
 
 ## Conclusions
 
-- TBD
+ - Network performance drops dramatically (5x - 14x) when OVS or ipsec are used
+   without hardware offloading.
+ - With offloading, an OVS vxlan adds a small (0-20%) performance penalty
+ - With offloading, ipsec adds a moderate (30-40%) performance penalty
 
 ## Common steps
 
@@ -194,6 +200,12 @@ Install a few common debian packages used in this example
 sudo apt install -y mstflint wget qemu-system-x86 \
     openvswitch-switch openvswitch-vtep \
     openvswitch-ipsec strongswan-starter
+```
+
+Enable openvswitch hardware offloads
+
+```
+sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:hw-offload=true
 ```
 
 You will also need to locate and download the [latest versions of the DOCA-OFED
@@ -297,7 +309,10 @@ sudo mstconfig --dev 03:00.0 set SRIOV_EN=1 NUM_OF_VFS=16
 Some features, including multi-port eswitch and ip-sec over an active-passive
 bond, may require the following setting (cargo-culting from the
 [DDPK multiport eswitch documentation-](
-https://doc.dpdk.org/guides/nics/mlx5.html#multiport-e-switch) )
+https://doc.dpdk.org/guides/nics/mlx5.html#multiport-e-switch) ). I haven't
+found any documentation that this must be set to support ipsec offloading
+over a bond, but I have been unable to get this offloading to work without
+this setting.
 
 ```
 sudo mstconfig --dev 03:00.0 set LAG_RESOURCE_ALLOCATION=1
@@ -388,83 +403,143 @@ sudo ethtool --offload bond0 esp-hw-offload on
 sudo ethtool --offload bond0 esp-tx-csum-hw-offload on
 ```
 
-For this example we'll use
+Next, we assign an ip address to the bond and set it and its slave interfaces
+to the "up" state.
 
 ```
 sudo ip addr replace ${LOCAL_BOND_IP}/24 dev bond0
 sudo ip link set dev ${PF0} mtu 9216 up
 sudo ip link set dev ${PF1} mtu 9216 up
 sudo ip link set dev bond0 mtu 9216 up
+```
 
-sudo ip link set ${REPRESENTOR} mtu 9000 up
+### Step 3a: ipsec using low-level ip xfrm interface and pre-shared key
 
-sudo ip netns add ns0 || true
-sudo ip link set dev ${VF} netns ns0
-sudo ip netns exec ns0 ip addr replace dev ${VF} ${LOCAL_VF_IP}/24
-sudo ip netns exec ns0 ip link set dev ${VF} mtu 9000 up
+An IPsec connection requires establishing shared secret keys between the two
+machines (typically with a protocol like IKEv2 that can use public keys and
+certificates, similar to TLS) and also rotation of those shared keys over time.
+Those shared secret keys are then used to encrypt network packets sent between
+the two machines. The linux kernel [only handles the low level encryption of
+packets](https://docs.kernel.org/networking/xfrm/xfrm_device.html)
+ with the secret keys and depends on a user level program (e.g.
+strongswan) to manage things like the initial key exchange and key rotation.
 
-if $ENABLE_IPSEC; then
+To simplify this experiment, we'll use the low-level linux xfrm commands
+directly to set up an ipsec connection.  These intended for use by programs
+such as stronswan rather than typical users, so they are a bit ugly and
+verbose. The ipsec connection consists of two unidirectional connections, one
+for packets going 'out' to the remote machine and one for packets arriving 'in'
+from the remote machine. For each connection we first need to create an xfrm
+state, which defines things like the encryption key and algorithm used and
+stores things like packet sequence numbers:
 
-	sudo ip xfrm state add \
-	    src ${LOCAL_VTEP_IP}/24 \
-	    dst ${REMOTE_VTEP_IP}/24 \
-	    proto esp \
-	    spi ${SPI_OUT} \
-	    reqid ${REQID_OUT} \
-	    mode transport \
-	    aead 'rfc4106(gcm(aes))' ${PSK_OUT} 128 \
-	    offload packet dev ${PF0} dir out \
-	    sel \
-            src ${LOCAL_VTEP_IP} \
-            dst ${REMOTE_VTEP_IP} \
-            flag esn \
-            # replay-window 64
-	sudo ip xfrm state add \
-	    src ${REMOTE_VTEP_IP}/24 \
-	    dst ${LOCAL_VTEP_IP}/24 \
-	    proto esp \
-	    spi ${SPI_IN} \
-	    reqid ${REQID_IN} \
-	    mode transport \
-	    aead 'rfc4106(gcm(aes))' ${PSK_IN} 128 \
-	    offload packet dev ${PF0} dir in \
-	    sel \
-            src ${REMOTE_VTEP_IP} \
-            dst ${LOCAL_VTEP_IP} \
-            flag esn \
-            replay-window 64
-	sudo ip xfrm policy add \
-	    src ${LOCAL_VTEP_IP} \
-	    dst ${REMOTE_VTEP_IP} \
-	    offload packet dev ${PF0} \
-	    dir out \
-	    tmpl \
-		src ${LOCAL_VTEP_IP}/24 \
-		dst ${REMOTE_VTEP_IP}/24 \
-		proto esp \
-            reqid ${REQID_OUT} \
-            mode transport \
-            priority 12
-	sudo ip xfrm policy add \
-	    src ${REMOTE_VTEP_IP} \
-	    dst ${LOCAL_VTEP_IP} \
-	    offload packet dev ${PF0} \
-	    dir in \
-	    tmpl \
-		src ${REMOTE_VTEP_IP}/24 \
-		dst ${LOCAL_VTEP_IP}/24 \
-		proto esp \
-            reqid ${REQID_IN} \
-            mode transport \
-            priority 12
-fi
+```
+sudo ip xfrm state add \
+    src ${LOCAL_VTEP_IP}/24 \
+    dst ${REMOTE_VTEP_IP}/24 \
+    proto esp \
+    spi ${SPI_OUT} \
+    reqid ${REQID_OUT} \
+    mode transport \
+    aead 'rfc4106(gcm(aes))' ${PSK_OUT} 128 \
+    offload packet dev ${PF0} dir out \
+    sel \
+        src ${LOCAL_VTEP_IP} \
+        dst ${REMOTE_VTEP_IP} \
+        flag esn \
+        # replay-window 64
+sudo ip xfrm state add \
+    src ${REMOTE_VTEP_IP}/24 \
+    dst ${LOCAL_VTEP_IP}/24 \
+    proto esp \
+    spi ${SPI_IN} \
+    reqid ${REQID_IN} \
+    mode transport \
+    aead 'rfc4106(gcm(aes))' ${PSK_IN} 128 \
+    offload packet dev ${PF0} dir in \
+    sel \
+        src ${REMOTE_VTEP_IP} \
+        dst ${LOCAL_VTEP_IP} \
+        flag esn \
+        replay-window 64
+```
 
+For each connection, we also need to define an xfrm policy which will be
+applied to incoming and outgoing packets to decide if they need to be processed
+by the ipsec code, and if so which xfrm state to use for that packet.
+
+```
+sudo ip xfrm policy add \
+    src ${LOCAL_VTEP_IP} \
+    dst ${REMOTE_VTEP_IP} \
+    offload packet dev ${PF0} \
+    dir out \
+    tmpl \
+    src ${LOCAL_VTEP_IP}/24 \
+    dst ${REMOTE_VTEP_IP}/24 \
+    proto esp \
+        reqid ${REQID_OUT} \
+        mode transport \
+        priority 12
+sudo ip xfrm policy add \
+    src ${REMOTE_VTEP_IP} \
+    dst ${LOCAL_VTEP_IP} \
+    offload packet dev ${PF0} \
+    dir in \
+    tmpl \
+    src ${REMOTE_VTEP_IP}/24 \
+    dst ${LOCAL_VTEP_IP}/24 \
+    proto esp \
+        reqid ${REQID_IN} \
+        mode transport \
+        priority 12
+```
+
+For each of these, note the `offload packet ...` line of parameters - these
+enable offloading of the entire encapsulation and encryption to the network
+adapter, and also indicate which network adapter will be used for offloading
+(which must match the one the given packets are received or sent on).
+
+### Step 5: vxlan setup
+
+The vxlan needs an interface and ip address on the underlay network to send and
+receive the tunneled packets, known as a virtual tunnel end point or VTEP.
+While we could use the the bond itself and its current underlay ip address,
+it's often useful to create a new ip address for each VTEP (e.g. so that you
+can apply different packet filtering or ipsec policies) and assign that address
+to the loop back interface, allowing packets to reach it from multiple
+interfaces.
+
+```
 sudo ip addr replace ${LOCAL_VTEP_IP}/32 dev lo
-sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
+```
 
+We then will also need to provide a route to reach the VTEP address on the
+remote machine, which we will add manually for this example (but would likely
+be provided by something like BGP in a production setting).
+
+```
+sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
+```
+
+Next, we set up the representor for the VF
+
+```
+sudo ip link set ${REPRESENTOR} mtu 9000 up
+```
+
+We then create an OVS bridge (after deleting the old one if it was there) and
+add the representor to the bridge.
+
+```
 sudo ovs-vsctl del-br br-ovs || true
 sudo ovs-vsctl add-br br-ovs
 sudo ovs-vsctl add-port br-ovs ${REPRESENTOR}
+```
+
+We also create and add a vxlan interface to the bridge.
+
+```
 sudo ovs-vsctl add-port br-ovs vxlan1 \
     -- set interface vxlan1 type=vxlan \
     options:local_ip=${LOCAL_VTEP_IP} \
@@ -474,19 +549,61 @@ sudo ovs-vsctl add-port br-ovs vxlan1 \
 
 ```
 
-### Step 3a: ipsec using low-level ip xfrm interface and pre-shared key
+### Step 6: VM setup
+
+For setting up the VM, we follow the same general approach used
+in the [previous ConnectX-5 experiments](
+ConnectX5-SRIOV-notes.md ), with the following largely copied from these prior
+notes.
+
+To start, we need to bind the VF to the vfio driver on the host. First, load
+the vfio driver and let it know that it should claim this type of device:
 
 ```
-LOCAL_VTEP_IP=192.168.80.2
-LOCAL_VF_IP=192.168.90.2
-REMOTE_VTEP_IP=192.168.80.3
-REMOTE_VF_IP=192.168.90.3
+sudo modprobe vfio-pci
+echo $(cat /sys/bus/pci/devices/0000\:03\:00.2/{vendor,device}) \
+    | sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id
 ```
 
-### Step 4: VM setup
+Unbind the VF from the mlx5 driver and rebind it to the vfio driver
 
-One check that the traffic is encrypted is by looking at the number of bytes
-and packets with either ethtool on the host machine:
+```
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+```
+
+Run qemu, using pci-passthrough for a VF. In this example, you can log in to
+the VM with root with a blank password.
+
+```
+if ! [ -f debian-13-nocloud-amd64-20250814-2204.qcow2 ]; then
+    wget https://cloud.debian.org/images/cloud/trixie/20250814-2204/debian-13-nocloud-amd64-20250814-2204.qcow2
+fi
+sudo qemu-system-x86_64 -accel kvm -nographic -m 8G -cpu host -smp 16 \
+    -drive file=debian-13-nocloud-amd64-20250814-2204.qcow2 \
+    -device vfio-pci,host=0000:03:00.2
+```
+
+In the VM, you can just configure this NIC as usual
+
+```
+sudo ip addr add dev ens4 192.168.90.2/24
+sudo ip link set dev ens4 up mtu 9000
+```
+
+
+Unbind the VF from the mlx5 driver and rebind it to the vfio driver
+
+```
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+```
+
+
+## Confirming ipsec is being used
+
+One quick check that the traffic is encrypted is by looking at the number of
+ipsec bytes and packets with either `ethtool` on the host machine:
 
 ```
 sudo ethtool -S enp3s0f0np0 | grep ipsec
@@ -498,3 +615,14 @@ or with `ip xfrm state`:
 sudo ip -s xfrm state
 ```
 
+You should see both numbers rise rapidly when iperf3 is being used in
+appropriate proportion to the network traffic.
+
+### Other useful articles
+
+  - [Linux XFRM Reference Guide for IPsec](
+    https://pchaigno.github.io/xfrm/2024/10/30/linux-xfrm-ipsec-reference-guide.html)
+  - [Nftables - Netfilter and VPN/IPsec packet flow](
+        https://thermalcircle.de/doku.php?id=blog:linux:nftables_ipsec_packet_flow)
+  - [Figuring out how ipsec transforms work in Linux](
+        https://blog.hansenpartnership.com/figuring-out-how-ipsec-transforms-work-in-linux/)
