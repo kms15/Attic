@@ -3,19 +3,21 @@
 set -xeuo pipefail
 
 ENABLE_IPSEC=true
+USE_NET_NAMESPACE=false
 
 case $(hostname) in
 
 	aratinga)
 		PF0=enp3s0f0np0
 		PF1=enp3s0f1np1
-		VF=enp3s0f0v0 
-		REPRESENTOR=enp3s0f0r0 
-		PF0_BUSID=pci/0000:03:00.0
-		PF1_BUSID=pci/0000:03:00.1
+		VF=enp3s0f0v0
+		REPRESENTOR=enp3s0f0r0
+		PF0_BUSID=0000:03:00.0
+		PF1_BUSID=0000:03:00.1
 		LOCAL_BOND_IP=192.168.70.2
 		LOCAL_VTEP_IP=192.168.80.2
 		LOCAL_VF_IP=192.168.90.2
+		VF_BUSID=0000:03:00.2
 		REMOTE_BOND_IP=192.168.70.3
 		REMOTE_VTEP_IP=192.168.80.3
 		REMOTE_VF_IP=192.168.90.3
@@ -30,13 +32,14 @@ case $(hostname) in
 	pyrrhura)
 		PF0=enp3s0f0np0
 		PF1=enp3s0f1np1
-		VF=enp3s0f0v0 
-		REPRESENTOR=enp3s0f0r0 
-		PF0_BUSID=pci/0000:03:00.0
-		PF1_BUSID=pci/0000:03:00.1
+		VF=enp3s0f0v0
+		REPRESENTOR=enp3s0f0r0
+		PF0_BUSID=0000:03:00.0
+		PF1_BUSID=0000:03:00.1
 		LOCAL_BOND_IP=192.168.70.3
 		LOCAL_VTEP_IP=192.168.80.3
 		LOCAL_VF_IP=192.168.90.3
+		VF_BUSID=0000:03:00.2
 		REMOTE_BOND_IP=192.168.70.2
 		REMOTE_VTEP_IP=192.168.80.2
 		REMOTE_VF_IP=192.168.90.2
@@ -55,6 +58,13 @@ case $(hostname) in
 		;;
 esac
 
+# The 3992 underlay MTU seems to provide optimal performance for an ipsec
+# offload of a vxlan tunnel in transport mode; this likely corresponds to a
+# packet size that just fits into a 4096 byte page of memory for DMA transfer
+# purposes.
+OVERLAY_MTU=3992
+UNDERLAY_MTU=9216
+
 sudo apt install -y openvswitch-switch openvswitch-vtep
 if $ENABLE_IPSEC; then
 	sudo apt install -y openvswitch-ipsec strongswan-starter
@@ -71,12 +81,12 @@ sudo ip link set ${PF1} down
 
 echo '0' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
 echo '0' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
-sudo devlink dev eswitch set ${PF0_BUSID} mode legacy
-sudo devlink dev eswitch set ${PF1_BUSID} mode legacy
-sudo devlink dev param set ${PF0_BUSID} name flow_steering_mode value dmfs cmode runtime
-sudo devlink dev param set ${PF1_BUSID} name flow_steering_mode value dmfs cmode runtime
-sudo devlink dev eswitch set ${PF0_BUSID} mode switchdev
-sudo devlink dev eswitch set ${PF1_BUSID} mode switchdev
+sudo devlink dev eswitch set pci/${PF0_BUSID} mode legacy
+sudo devlink dev eswitch set pci/${PF1_BUSID} mode legacy
+sudo devlink dev param set pci/${PF0_BUSID} name flow_steering_mode value dmfs cmode runtime
+sudo devlink dev param set pci/${PF1_BUSID} name flow_steering_mode value dmfs cmode runtime
+sudo devlink dev eswitch set pci/${PF0_BUSID} mode switchdev
+sudo devlink dev eswitch set pci/${PF1_BUSID} mode switchdev
 echo '2' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
 echo '2' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
 
@@ -87,16 +97,24 @@ sudo ethtool --offload bond0 esp-hw-offload on
 sudo ethtool --offload bond0 esp-tx-csum-hw-offload on
 
 sudo ip addr replace ${LOCAL_BOND_IP}/24 dev bond0
-sudo ip link set dev ${PF0} mtu 9216 up
-sudo ip link set dev ${PF1} mtu 9216 up
-sudo ip link set dev bond0 mtu 9216 up
+sudo ip link set dev ${PF0} mtu ${UNDERLAY_MTU} up
+sudo ip link set dev ${PF1} mtu ${UNDERLAY_MTU} up
+sudo ip link set dev bond0 mtu ${UNDERLAY_MTU} up
 
-sudo ip link set ${REPRESENTOR} mtu 9000 up
+sudo ip link set ${REPRESENTOR} mtu ${OVERLAY_MTU} up
 
-sudo ip netns add ns0 || true
-sudo ip link set dev ${VF} netns ns0
-sudo ip netns exec ns0 ip addr replace dev ${VF} ${LOCAL_VF_IP}/24
-sudo ip netns exec ns0 ip link set dev ${VF} mtu 9000 up
+if ${USE_NET_NAMESPACE} ; then
+    sudo ip netns add ns0 || true
+    sudo ip link set dev ${VF} netns ns0
+    sudo ip netns exec ns0 ip addr replace dev ${VF} ${LOCAL_VF_IP}/24
+    sudo ip netns exec ns0 ip link set dev ${VF} mtu ${OVERLAY_MTU} up
+else
+    sudo modprobe vfio-pci || true
+    echo $(cat /sys/bus/pci/devices/0000\:03\:00.2/{vendor,device}) \
+        | sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id || true
+    echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+    echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+fi
 
 if $ENABLE_IPSEC; then
 

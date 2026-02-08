@@ -155,32 +155,56 @@ experiments.
 ### Network performance measurements
 
 The throughput was measured with iperf3 with different MTU
-and number of threads, recorded below as iperf3/<MTU>/<THREADS>. Because there
+and number of threads, recorded below as iperf3 <MTU>/<THREADS>. Because there
 was significant variability (perhaps based on cpu core assignment?) the command
-was run 3 times and the median of the 6 values recorded. Here is an example
-command with 2 threads:
+was run first with a single warm-up run, and then with 10 runs. As the sent and
+received traffic were relatively symmetric, this then generated 20 average
+transfer speeds, of which the mean and sample deviation are reported.:
 
 ```
 iperf3 --parallel 2 --bidi --client 192.168.90.3
 ```
 
 The latency for each approach was measured using a flood ping, with one warm up
-run (to initialize the flows) followed by three more runs, with the median
-recorded.
+run (to initialize the flows) followed by a second run, with the mean and
+population standard deviation reported from the results of the second run.
 
 ```
 ping -fc 10000 192.168.90.3
 ```
 
+[The script used can be found here](../scipts/iperfstats.py).
+
+To create the complete offloaded configuration labeled "VM-VM bond, ovs/tc,
+VXLAN, NIC IPsec", the machines were configured as described below. For the
+"VM-VM bond, ovs/tc, VXLAN" test the configuration was as described but the ip
+xfrm policies and states were flushed at the end (removing ipsec). The "VM-VM
+bond, ovs/tc, VXLAN" state was created by then disabling OVS offloads by
+running `sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=false &&
+sudo systemctl restart openvswitch-switch.service`. The "host-to-host, 1-port,
+legacy" results were obtained after a fresh boot with manual assignment of an
+ip address and MTU to one of the PFs on the NIC using the standard iproute2
+tools (e.g. `ip addr ...`). The "host-to-host, 1-port, CPU IPsec, legacy"
+results were then obtained by adding xfrm state and policy rules similar to the
+ones below but with the packet offload lines removed.
+
+The improved ipsec performance with an MTU of 3992 was discovered by a chance
+setting of the MTU near this value and then manual tuning of the MTU. I suspect
+it is the packet size that will fit into a single 4096 byte memory page (and
+thus a single DMA request) after adding the vxlan and ipsec headers, but I have
+not confirmed this yet with a packet sniffer. Under optimal conditions (e.g.
+with a VF in a namespace on the host) I have seen rates of 65.5 Gb/s with this
+setting.
+
 ## Results
 
-| Approach                         | iperf3/1500/2 (Gb/s) | iperf3/9000/2 (Gb/s) | iperf3/9000/6 (Gb/s) | ping mean (us) |
-| -------------------------------- | -------------------- | -------------------- | -------------------- | -------------- |
-| host-to-host, legacy             |        77            |         96           |          87          |       30       |
-| host-to-host + cpu ipsec         |         8            |         22           |          17          |       32       |
-| VM-VM ovs + VXLAN                |         5            |         14           |          12          |       73       |
-| VM-VM ovs/tc + VXLAN             |        60            |         79           |          97          |       31       |
-| VM-VM ovs/tc + VXLAN + NIC ipsec |        54            |         57.3         |          57.4        |       33       |
+| Approach                                        | iperf3<br>1500/2<br>(Gb/s) | iperf3<br>3992/2<br>(Gb/s)    | iperf3<br>9000/2<br>(Gb/s) | iperf3<br>9000/6<br>(Gb/s) | ping rtt<br>(μs) |
+| ----------------------------------------------- | -------------------------- | ----------------------------- | -------------------------- | -------------------------- | ---------------- |
+| host-to-host, 1-port,<br>legacy                 |      67.3  ± 2.7           |            89.  ± 4.          |       94.  ± 3.            |       88.   ± 3.           |     31 ± 3       |
+| host-to-host, 1-port,<br>CPU IPsec, legacy      |       3.97 ± 0.11          |             8.4 ± 0.4         |       15.0 ± 0.3           |       11.6  ± 1.1          |     30 ± 1       |
+| VM-VM bond, ovs,<br>VXLAN                       |       4.39 ± 0.19          |            10.3 ± 0.9         |       13.2 ± 1.1           |       11.9  ± 1.0          |     77 ± 6       |
+| VM-VM bond, ovs/tc,<br>VXLAN                    |      40.   ± 5.            |            81.  ± 6.          |       79.  ± 7.            |       97.0  ± 0.8          |     31 ± 3       |
+| VM-VM bond, ovs/tc,<br>VXLAN, NIC IPsec         |      40.   ± 6.            |            62.2 ± 2.2         |       57.1 ± 0.4           |       57.35 ± 0.04         |     33 ± 3       |
 
 
 ## Conclusions
@@ -522,10 +546,13 @@ be provided by something like BGP in a production setting).
 sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
 ```
 
-Next, we set up the representor for the VF
+Next, we set up the representor for the VF. Note that we are choosing the
+overlay MTU so that the packet plus the ipsec and vxlan headers will just
+fit into a 4k memory page (since this seems to help ipsec offloading
+performance).
 
 ```
-sudo ip link set ${REPRESENTOR} mtu 9000 up
+sudo ip link set ${REPRESENTOR} mtu $(( 4096 - 110 )) up
 ```
 
 We then create an OVS bridge (after deleting the old one if it was there) and
@@ -588,15 +615,7 @@ In the VM, you can just configure this NIC as usual
 
 ```
 sudo ip addr add dev ens4 192.168.90.2/24
-sudo ip link set dev ens4 up mtu 9000
-```
-
-
-Unbind the VF from the mlx5 driver and rebind it to the vfio driver
-
-```
-echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-echo "0000:03:00.2" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+sudo ip link set dev ens4 up mtu $(( 4096 - 110 ))
 ```
 
 
