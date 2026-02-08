@@ -194,7 +194,8 @@ it is the packet size that will fit into a single 4096 byte memory page (and
 thus a single DMA request) after adding the vxlan and ipsec headers, but I have
 not confirmed this yet with a packet sniffer. Under optimal conditions (e.g.
 with a VF in a namespace on the host) I have seen rates of 65.5 Gb/s with this
-setting.
+setting. All results are shown with an underlay MTU of 9216, an overlay MTU of
+9000, and the indicated route MTU.
 
 ## Results
 
@@ -206,6 +207,11 @@ setting.
 | VM-VM bond, ovs/tc,<br>VXLAN                    |      40.   ± 5.            |            81.  ± 6.          |       79.  ± 7.            |       97.0  ± 0.8          |     31 ± 3       |
 | VM-VM bond, ovs/tc,<br>VXLAN, NIC IPsec         |      40.   ± 6.            |            62.2 ± 2.2         |       57.1 ± 0.4           |       57.35 ± 0.04         |     33 ± 3       |
 
+Additions:
+
+With an underlay MTU 0f 1600 and an overlay MTU of 1500 and 6 streams, the full
+ovs/tc + VXLAN + NIC IPsec is able to reach 75 ± 9 Gb/s; further turning may be
+possible (perhaps by enabling things like ECN).
 
 ## Conclusions
 
