@@ -1,14 +1,14 @@
 overcut=1;
 depth=15;
 width=32;
-hole_diameter=4;
+hole_diameter=5;
 $fn=30;
 
 rotate([180,0,0])
     translate([0,0,-depth])
     difference() {
         cube([width,100,depth]);
-        translate([5,19,-overcut])
+        translate([5,14,-overcut])
             cube([22, 39, depth + 2*overcut]);
         translate([0,3*25.4,0])
             rotate([atan(0.5/4),0,0])
