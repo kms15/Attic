@@ -62,8 +62,8 @@ esac
 # offload of a vxlan tunnel in transport mode; this likely corresponds to a
 # packet size that just fits into a 4096 byte page of memory for DMA transfer
 # purposes.
-OVERLAY_MTU=3992
-UNDERLAY_MTU=9216
+OVERLAY_MTU=9216
+UNDERLAY_MTU=9000
 
 sudo apt install -y openvswitch-switch openvswitch-vtep
 if $ENABLE_IPSEC; then
@@ -176,6 +176,8 @@ sudo ip addr replace ${LOCAL_VTEP_IP}/32 dev lo
 sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
 
 sudo ovs-vsctl del-br br-ovs || true
+sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
+sudo systemctl restart openvswitch-switch.service
 sudo ovs-vsctl add-br br-ovs
 sudo ovs-vsctl add-port br-ovs ${REPRESENTOR}
 sudo ovs-vsctl add-port br-ovs vxlan1 \

@@ -175,6 +175,14 @@ ping -fc 10000 192.168.90.3
 
 [The script used can be found here](../scipts/iperfstats.py).
 
+Note that the route-based mtu setting in the script is not sufficient for
+optimal performance - the mtu should be manually set to match the desired
+mtu on both the source and destination VF, and the underlay network should
+have an MTU that is larger, ideally by ~100 bytes or more. In my experiments
+there was no performance benefit to trying to match the underlay and overlay
+MTUs, however (e.g. performance for an 1500 byte mtu overlay seems to be the
+same with a 9216 and a 1600 byte underlay mtu).
+
 To create the complete offloaded configuration labeled "VM-VM bond, ovs/tc,
 VXLAN, NIC IPsec", the machines were configured as described below. For the
 "VM-VM bond, ovs/tc, VXLAN" test the configuration was as described but the ip
@@ -188,37 +196,47 @@ tools (e.g. `ip addr ...`). The "host-to-host, 1-port, CPU IPsec, legacy"
 results were then obtained by adding xfrm state and policy rules similar to the
 ones below but with the packet offload lines removed.
 
-The improved ipsec performance with an MTU of 3992 was discovered by a chance
-setting of the MTU near this value and then manual tuning of the MTU. I suspect
-it is the packet size that will fit into a single 4096 byte memory page (and
-thus a single DMA request) after adding the vxlan and ipsec headers, but I have
-not confirmed this yet with a packet sniffer. Under optimal conditions (e.g.
-with a VF in a namespace on the host) I have seen rates of 65.5 Gb/s with this
-setting. All results are shown with an underlay MTU of 9216, an overlay MTU of
-9000, and the indicated route MTU.
-
 ## Results
 
-| Approach                                        | iperf3<br>1500/2<br>(Gb/s) | iperf3<br>3992/2<br>(Gb/s)    | iperf3<br>9000/2<br>(Gb/s) | iperf3<br>9000/6<br>(Gb/s) | ping rtt<br>(μs) |
-| ----------------------------------------------- | -------------------------- | ----------------------------- | -------------------------- | -------------------------- | ---------------- |
-| host-to-host, 1-port,<br>legacy                 |      67.3  ± 2.7           |            89.  ± 4.          |       94.  ± 3.            |       88.   ± 3.           |     31 ± 3       |
-| host-to-host, 1-port,<br>CPU IPsec, legacy      |       3.97 ± 0.11          |             8.4 ± 0.4         |       15.0 ± 0.3           |       11.6  ± 1.1          |     30 ± 1       |
-| VM-VM bond, ovs,<br>VXLAN                       |       4.39 ± 0.19          |            10.3 ± 0.9         |       13.2 ± 1.1           |       11.9  ± 1.0          |     77 ± 6       |
-| VM-VM bond, ovs/tc,<br>VXLAN                    |      40.   ± 5.            |            81.  ± 6.          |       79.  ± 7.            |       97.0  ± 0.8          |     31 ± 3       |
-| VM-VM bond, ovs/tc,<br>VXLAN, NIC IPsec         |      40.   ± 6.            |            62.2 ± 2.2         |       57.1 ± 0.4           |       57.35 ± 0.04         |     33 ± 3       |
+### Results for conventional frames (1500 byte overlay MTU / 9216 byte underlay MTU)
 
-Additions:
+| Approach                                        | iperf0<br>1 stream<br>(Gb/s) | iperf0<br>2 streams<br>(Gb/s) | iperf0<br>6 streams<br>(Gb/s) | iperf0<br>8 streams<br>(Gb/s) | ping rtt<br>(μs) |
+| ----------------------------------------------- | ---------------------------- | ----------------------------- | ----------------------------- | ----------------------------- | ---------------- |
+| host-to-host, 1-port,<br>legacy                 |         49.   ±  3.          |          80.   ±  4.          |        88.1  ± 2.5            |            84.9  ± 2.1        |      31 ± 3      |
+| host-to-host, 1-port,<br>CPU ipsec, legacy      |          6.8  ±  0.6         |           4.55 ±  0.25        |         4.1  ± 2.2            |             4.1  ± 1.9        |      31 ± 2      |
+| VM-VM bond, ovs,<br>VXLAN                       |          5.5  ±  0.5         |           4.7  ±  0.7         |         4.0  ± 0.3            |             4.04 ± 0.25       |      76 ± 5      |
+| VM-VM bond, ovs/tc,<br>VXLAN                    |         30.   ±  4.          |          55.   ±  10.         |        76.   ± 6.             |            75.   ± 6.         |      31 ± 2      |
+| VM-VM bond, ovs/tc,<br>VXLAN, NIC IPsec         |         31.   ±  3.          |          54.   ±  10.         |        76.   ± 8.             |            74.   ± 5.         |      34 ± 4      |
 
-With an underlay MTU 0f 1600 and an overlay MTU of 1500 and 6 streams, the full
-ovs/tc + VXLAN + NIC IPsec is able to reach 75 ± 9 Gb/s; further turning may be
-possible (perhaps by enabling things like ECN).
+### Results for jumbo frames (9000 byte overlay MTU / 9216 byte underlay MTU)
+
+| Approach                                        | iperf3<br>1 stream<br>(Gb/s) | iperf3<br>2 streams<br>(Gb/s) | iperf3<br>6 streams<br>(Gb/s) | iperf3<br>8 streams<br>(Gb/s) | ping rtt<br>(μs) |
+| ----------------------------------------------- | ---------------------------- | ----------------------------- | ----------------------------- | ----------------------------- | ---------------- |
+| host-to-host, 1-port,<br>legacy                 |         71.   ±  7.          |          95.   ± 2.           |        90.    ± 4.            |            88.   ± 4.         |      27 ± 4      |
+| host-to-host, 1-port,<br>CPU ipsec, legacy      |         16.6  ±  0.3         |          14.8  ± 0.4          |        11.3   ± 1.2           |            11.0  ± 1.8        |      30 ± 2      |
+| VM-VM bond, ovs,<br>VXLAN                       |         14.9  ±  1.3         |          12.9  ± 1.4          |        11.8   ± 0.8           |            12.0  ± 0.5        |      76 ± 7      |
+| VM-VM bond, ovs/tc,<br>VXLAN                    |         47.   ± 10.          |          81.   ± 8.           |        97.0   ± 0.7           |            97.1  ± 0.5        |      30 ± 5      |
+| VM-VM bond, ovs/tc,<br>VXLAN, NIC IPsec         |         40.   ± 6.           |          57.20 ± 0.5          |        57.374 ± 0.023         |            57.35 ± 0.04       |      32 ± 4      |
+
+
 
 ## Conclusions
 
  - Network performance drops dramatically (5x - 14x) when OVS or ipsec are used
    without hardware offloading.
- - With offloading, an OVS vxlan adds a small (0-20%) performance penalty
- - With offloading, ipsec adds a moderate (30-40%) performance penalty
+ - With conventional MTUs there is a 10-40% performance penalty for a VM
+   running on OVS with tc offloading compared to legacy networking on the host,
+   with the greatest penalty seen at low concurrencies.
+ - With conventional MTUs there is little (if any) additional overhead for
+   ipsec offloading when added on top of OVS/tc offloading.
+ - With jumbo MTUs, the performance penalty for a VM running on the OVS/tc
+   stack drops to ~35% for a single stream and actually performs better than
+   legacy networking on the host at higher concurrencies.
+ - Ipsec adds an additional 20-40% penalty for jumbo frames, with a greater
+   penalty at higher concurrencies.
+ - At higher concurrencies ipsec performs better with a conventional 1500 byte
+   than with jumbo frames. Otherwise overall network throughput is generally
+   higher with jumbo frames and (to a point) with increased concurrency.
 
 ## Common steps
 
@@ -552,13 +570,18 @@ be provided by something like BGP in a production setting).
 sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
 ```
 
-Next, we set up the representor for the VF. Note that we are choosing the
-overlay MTU so that the packet plus the ipsec and vxlan headers will just
-fit into a 4k memory page (since this seems to help ipsec offloading
-performance).
+Next, we set up the representor for the VF, reducing the MTU to allow for ipsec
+and vxlan headers.
 
 ```
-sudo ip link set ${REPRESENTOR} mtu $(( 4096 - 110 )) up
+sudo ip link set ${REPRESENTOR} mtu 9000 up
+```
+
+We make sure OVS hardware offloading (through tc) is enabled.
+
+```
+sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
+sudo systemctl restart openvswitch-switch.service
 ```
 
 We then create an OVS bridge (after deleting the old one if it was there) and
@@ -621,7 +644,7 @@ In the VM, you can just configure this NIC as usual
 
 ```
 sudo ip addr add dev ens4 192.168.90.2/24
-sudo ip link set dev ens4 up mtu $(( 4096 - 110 ))
+sudo ip link set dev ens4 up
 ```
 
 
