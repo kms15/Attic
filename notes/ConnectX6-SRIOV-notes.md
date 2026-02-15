@@ -16,7 +16,8 @@ intra-VM traffic.
     but don't disclose the actual limit (directing the reader to contact their
     Nvidia representative. In my tests with tunneled vxlan ipsec3 traffic and
     9000 byte (overlay) mtu, the maximum ipsec encryption/decryption speed
-    seems to be a very consistent *57.4 Gb/s* in each direction. While this
+    seems to be a very consistent *57.4 Gb/s* in each direction, but can reach
+    *76 Gb/s* with a 1500 byte overlay. While this
     isn't true line-rate encryption, it's probably close enough for my current
     use-case (and upgrading to a ConnectX-7 would fix this if needed).
   - It appears that ipsec offloading [is not currently supported over bonds
