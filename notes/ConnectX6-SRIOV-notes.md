@@ -367,6 +367,21 @@ this setting.
 sudo mstconfig --dev 03:00.0 set LAG_RESOURCE_ALLOCATION=1
 ```
 
+Using switch functions (SF) requires a few flags to be enabled, per the example
+in the [Mellanox scalable functions upstream step by step guide](
+https://github.com/Mellanox/scalablefunctions/wiki/Upstream-step-by-step-guide
+). To my limited understanding, `PF_BAR2_ENABLE=0` seems to disable a legacy
+memory model for SFs, `PER_PF_NUM_SF=1` allows setting the number of SFs per
+PF (instead of the older shared model), `PF_TOTAL_SF=128` sets the maximum
+number of SFs per PFs (with 236 and 252 being shown as examples that will fit
+into the standard 256MB BAR size, but it seems wise to spare some memory for
+other offloads we'll be using), and `PF_SF_BAR_SIZE=10` sets the memory
+reserved per SF to 1MB.
+
+```
+sudo mstconfig --dev 03:00.0 set PF_BAR2_ENABLE=0 PER_PF_NUM_SF=1 PF_TOTAL_SF=128 PF_SF_BAR_SIZE=10
+```
+
 Reboot the system to set up the new PCIe BAR, etc. for SR-IOV
 
 ```

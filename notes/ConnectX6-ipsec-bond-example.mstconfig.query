@@ -23,7 +23,7 @@ Configurations:                                          Default             Cur
         NON_PREFETCHABLE_PF_BAR                     False(0)             False(0)             False(0)            
         VF_VPD_ENABLE                               False(0)             False(0)             False(0)            
         PF_NUM_PF_MSIX_VALID                        False(0)             False(0)             False(0)            
-        PER_PF_NUM_SF                               False(0)             False(0)             False(0)            
+*       PER_PF_NUM_SF                               False(0)             True(1)              True(1)             
         STRICT_VF_MSIX_NUM                          False(0)             False(0)             False(0)            
         VF_NODNIC_ENABLE                            False(0)             False(0)             False(0)            
         NUM_PF_MSIX_VALID                           True(1)              True(1)              True(1)             
@@ -216,10 +216,10 @@ Configurations:                                          Default             Cur
         ROCE_CONTROL                                ROCE_ENABLE(2)       ROCE_ENABLE(2)       ROCE_ENABLE(2)      
 *       PCI_WR_ORDERING                             per_mkey(0)          force_relax(1)       force_relax(1)      
         MULTI_PORT_VHCA_EN                          False(0)             False(0)             False(0)            
-        PF_TOTAL_SF                                 0                    0                    0                   
+*       PF_TOTAL_SF                                 0                    128                  128                 
         PF_SD_GROUP                                 0                    0                    0                   
         PF_DEVICE_ID_ENABLE                         False(0)             False(0)             False(0)            
-        PF_SF_BAR_SIZE                              0                    0                    0                   
+*       PF_SF_BAR_SIZE                              0                    10                   10                  
         PF_NUM_PF_MSIX                              63                   63                   63                  
         PF_DEVICE_ID                                4125                 4125                 4125                
         BOOT_VLAN                                   1                    1                    1                   
