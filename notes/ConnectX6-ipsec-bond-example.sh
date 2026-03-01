@@ -3,9 +3,10 @@
 set -xeuo pipefail
 
 ENABLE_IPSEC=true
-USE_NET_NAMESPACE=false
+USE_NET_NAMESPACE=true
 USE_VM=false
 USE_OVS=false
+USE_TC=true
 
 case $(hostname) in
 
@@ -13,16 +14,20 @@ case $(hostname) in
         PF0=enp3s0f0np0
         PF1=enp3s0f1np1
         VF=enp3s0f0v0
+        VF_REPRESENTOR=enp3s0f0r0
         VF_BUSID=0000:03:00.2
         VF_PF=${PF0}
         VF_NUM=0
-        REPRESENTOR=enp3s0f0r0
+	VTEP_SF=enp3s0f0s42
+        VTEP_SF_REPRESENTOR=en3f0pf0sf42
+        VTEP_SF_NUM=42
         PF0_BUSID=0000:03:00.0
         PF1_BUSID=0000:03:00.1
         LOCAL_BOND_IP=192.168.70.2
         LOCAL_VTEP_IP=192.168.80.2
+        LOCAL_VTEP_MAC=02:00:00:00:01:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         LOCAL_VF_IP=192.168.90.2
-	LOCAL_VF_MAC=02:00:00:00:00:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        LOCAL_VF_MAC=02:00:00:00:00:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         REMOTE_BOND_IP=192.168.70.3
         REMOTE_VTEP_IP=192.168.80.3
         REMOTE_VF_IP=192.168.90.3
@@ -38,16 +43,20 @@ case $(hostname) in
         PF0=enp3s0f0np0
         PF1=enp3s0f1np1
         VF=enp3s0f0v0
+        VF_REPRESENTOR=enp3s0f0r0
         VF_BUSID=0000:03:00.2
         VF_PF=${PF0}
         VF_NUM=0
-        REPRESENTOR=enp3s0f0r0
+	VTEP_SF=enp3s0f0s42
+        VTEP_SF_REPRESENTOR=en3f0pf0sf42
+        VTEP_SF_NUM=42
         PF0_BUSID=0000:03:00.0
         PF1_BUSID=0000:03:00.1
         LOCAL_BOND_IP=192.168.70.3
         LOCAL_VTEP_IP=192.168.80.3
+        LOCAL_VTEP_MAC=02:00:00:00:01:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         LOCAL_VF_IP=192.168.90.3
-	LOCAL_VF_MAC=02:00:00:00:00:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        LOCAL_VF_MAC=02:00:00:00:00:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         REMOTE_BOND_IP=192.168.70.2
         REMOTE_VTEP_IP=192.168.80.2
         REMOTE_VF_IP=192.168.90.2
@@ -71,9 +80,9 @@ UNDERLAY_MTU=9216
 
 if ${USE_OVS} ; then
     sudo apt install -y openvswitch-switch openvswitch-vtep
-    if $ENABLE_IPSEC; then
-        sudo apt install -y openvswitch-ipsec strongswan-starter
-    fi
+    #if $ENABLE_IPSEC; then
+    #    sudo apt install -y openvswitch-ipsec strongswan-starter
+    #fi
 fi
 
 if $ENABLE_IPSEC; then
@@ -84,6 +93,15 @@ fi
 sudo ip link delete bond0 || true
 sudo ip link set ${PF0} down
 sudo ip link set ${PF1} down
+
+sudo ip addr del ${LOCAL_VTEP_IP}/32 dev lo || true
+
+sudo devlink port del ${VTEP_SF_REPRESENTOR} || true
+sudo ovs-vsctl del-br br-ovs || true
+sudo ip link del dev br-overlays || true
+sudo ip link del dev br-underlay || true
+sudo ip link del dev br-uplink || true
+sudo ip link delete vxlan100 || true
 
 # Note: we can only set a VF to "trusted" while the NIC is in legacy mode, but
 # some settings can not be changed if VFs are bound to the driver and the bond
@@ -116,12 +134,7 @@ sudo ip link set dev ${PF0} mtu ${UNDERLAY_MTU} up
 sudo ip link set dev ${PF1} mtu ${UNDERLAY_MTU} up
 sudo ip link set dev bond0 mtu ${UNDERLAY_MTU} up
 
-# Note: bond must be initialized before VFs for RoCEv2 blonding to be properly
-# initialized for the VFs.
-#echo '2' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
-#echo '2' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
-
-sudo ip link set ${REPRESENTOR} mtu ${OVERLAY_MTU} up
+sudo ip link set ${VF_REPRESENTOR} mtu ${OVERLAY_MTU} up
 
 if ${USE_NET_NAMESPACE} ; then
     echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/bind
@@ -131,7 +144,7 @@ if ${USE_NET_NAMESPACE} ; then
     sudo ip netns exec ns0 ip link set dev ${VF} mtu ${OVERLAY_MTU} up
 elif ${USE_VM} ; then
     sudo modprobe vfio-pci || true
-    echo $(cat /sys/bus/pci/devices/0000\:03\:00.2/{vendor,device}) \
+    echo $(cat "/sys/bus/pci/devices/${VF_BUSID}/{vendor,device}") \
         | sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id || true
     echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
     echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
@@ -197,17 +210,14 @@ if $ENABLE_IPSEC; then
         priority 12
 fi
 
-sudo ip addr replace ${LOCAL_VTEP_IP}/32 dev lo
 sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
 
-sudo ovs-vsctl del-br br-ovs || true
-sudo ip link del dev br0 || true
-
 if ${USE_OVS} ; then
+    sudo ip addr add ${LOCAL_VTEP_IP}/32 dev lo
     sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
     sudo systemctl restart openvswitch-switch.service
     sudo ovs-vsctl add-br br-ovs
-    sudo ovs-vsctl add-port br-ovs ${REPRESENTOR}
+    sudo ovs-vsctl add-port br-ovs ${VF_REPRESENTOR}
     sudo ovs-vsctl add-port br-ovs vxlan1 \
         -- set interface vxlan1 type=vxlan \
         options:local_ip=${LOCAL_VTEP_IP} \
@@ -215,14 +225,53 @@ if ${USE_OVS} ; then
         options:key=1024 \
         options:dst_port=4789
 else
-	sudo ip link add br0 type bridge stp_state 0 forward_delay 0
-	sudo ip link set dev br0 up
+    # add the VTEP
+    sudo ip addr add ${LOCAL_VTEP_IP}/32 dev lo
 
-	sudo ip link set dev ${REPRESENTOR} down
-	sudo ip link set dev ${REPRESENTOR} master br0
-	sudo ip link set dev ${REPRESENTOR} up
+    # create the vxlan device
+    sudo ip link add vxlan100 \
+        type vxlan \
+        id 100 \
+        dstport 4789 \
+        local ${LOCAL_VTEP_IP} \
+        remote ${REMOTE_VTEP_IP} \
+        # nolearning \
+    sudo ip link set dev vxlan100 mtu ${OVERLAY_MTU} up
 
-	sleep 1
-	sudo ip link set dev bond0 master br0
-	sudo ip link set dev bond0 up
+    # create the overlay bridge and add the vxlan and VF representor interfaces
+    sudo ip link add br-overlays type bridge \
+        stp_state 0 \
+        vlan_filtering 1 \
+        vlan_default_pvid 1
+    sudo ip link set dev br-overlays up
+    sudo ip link set dev ${VF_REPRESENTOR} master br-overlays
+    sudo ip link set dev vxlan100 master br-overlays
+
+    sudo bridge vlan add vid 100 dev vxlan100 pvid untagged
+    sudo bridge vlan add vid 100 dev ${VF_REPRESENTOR} pvid untagged
+
+    # use tc flower rules to offload the vxlan and bridge logic
+    if ${USE_TC}; then
+        sudo tc qdisc add dev vxlan100 ingress
+        sudo tc filter add dev vxlan100 ingress \
+            protocol all prio 1 flower \
+                enc_src_ip ${REMOTE_VTEP_IP} \
+                enc_dst_ip ${LOCAL_VTEP_IP} \
+                enc_dst_port 4789 \
+                ip_flags nofrag \
+                enc_key_id 100 \
+            action tunnel_key unset \
+            action mirred egress redirect dev ${VF_REPRESENTOR}
+
+        sudo tc qdisc add dev ${VF_REPRESENTOR} ingress
+        sudo tc filter add dev ${VF_REPRESENTOR} ingress \
+            protocol all prio 1 flower \
+                indev ${VF_REPRESENTOR} \
+            action tunnel_key set \
+                src_ip ${LOCAL_VTEP_IP} \
+                dst_ip ${REMOTE_VTEP_IP} \
+                dst_port 4789 \
+                id 100 \
+            action mirred egress redirect dev vxlan100
+    fi
 fi
