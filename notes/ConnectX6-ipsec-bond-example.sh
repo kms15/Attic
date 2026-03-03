@@ -3,9 +3,6 @@
 set -xeuo pipefail
 
 ENABLE_IPSEC=true
-USE_NET_NAMESPACE=true
-USE_VM=false
-USE_OVS=false
 USE_TC=true
 
 case $(hostname) in
@@ -87,13 +84,6 @@ esac
 
 OVERLAY_MTU=9000
 UNDERLAY_MTU=9216
-
-if ${USE_OVS} ; then
-    sudo apt install -y openvswitch-switch openvswitch-vtep
-    #if $ENABLE_IPSEC; then
-    #    sudo apt install -y openvswitch-ipsec strongswan-starter
-    #fi
-fi
 
 if $ENABLE_IPSEC; then
     sudo ip xfrm state flush
@@ -221,103 +211,89 @@ fi
 
 sudo ip route replace to ${REMOTE_VTEP_IP}/32 nexthop via ${REMOTE_BOND_IP}
 
-if ${USE_OVS} ; then
-    sudo ip addr add ${LOCAL_VTEP_IP}/32 dev lo
-    sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
-    sudo systemctl restart openvswitch-switch.service
-    sudo ovs-vsctl add-br br-ovs
-    sudo ovs-vsctl add-port br-ovs ${VM_VF_REPRESENTOR}
-    sudo ovs-vsctl add-port br-ovs vxlan1 \
-        -- set interface vxlan1 type=vxlan \
-        options:local_ip=${LOCAL_VTEP_IP} \
-        options:remote_ip=${REMOTE_VTEP_IP} \
-        options:key=1024 \
-        options:dst_port=4789
-else
-    # add the VTEP
-    sudo ip addr add ${LOCAL_VTEP_IP}/32 dev lo
+# add the VTEP
+sudo ip addr add ${LOCAL_VTEP_IP}/32 dev lo
 
-    # create the vxlan device
-    sudo ip link add vxlan100 \
-        type vxlan \
-        id 100 \
-        dstport 4789 \
-        local ${LOCAL_VTEP_IP} \
-        remote ${REMOTE_VTEP_IP} \
-        # nolearning \
-    sudo ip link set dev vxlan100 mtu ${OVERLAY_MTU} up
+# create the vxlan device
+sudo ip link add vxlan100 \
+type vxlan \
+id 100 \
+dstport 4789 \
+local ${LOCAL_VTEP_IP} \
+remote ${REMOTE_VTEP_IP} \
+# nolearning \
+sudo ip link set dev vxlan100 mtu ${OVERLAY_MTU} up
 
-    # create the overlay bridge and add the vxlan and VF representor interfaces
-    sudo ip link add br-overlays type bridge \
-        stp_state 0 \
-        vlan_filtering 1 \
-        vlan_default_pvid 0 \
-        mcast_snooping 0
-    sudo ip link set dev br-overlays up
-    
-    sudo ip link set dev ${VM_VF_REPRESENTOR} master br-overlays
-    sudo bridge vlan add vid 100 dev ${VM_VF_REPRESENTOR} pvid untagged
+# create the overlay bridge and add the vxlan and VF representor interfaces
+sudo ip link add br-overlays type bridge \
+stp_state 0 \
+vlan_filtering 1 \
+vlan_default_pvid 0 \
+mcast_snooping 0
+sudo ip link set dev br-overlays up
 
-    sudo ip link set dev ${NS_VF_REPRESENTOR} master br-overlays
-    sudo bridge vlan add vid 100 dev ${NS_VF_REPRESENTOR} pvid untagged
+sudo ip link set dev ${VM_VF_REPRESENTOR} master br-overlays
+sudo bridge vlan add vid 100 dev ${VM_VF_REPRESENTOR} pvid untagged
 
-    sudo ip link set dev vxlan100 master br-overlays
-    sudo bridge vlan add vid 100 dev vxlan100 pvid untagged
+sudo ip link set dev ${NS_VF_REPRESENTOR} master br-overlays
+sudo bridge vlan add vid 100 dev ${NS_VF_REPRESENTOR} pvid untagged
 
-    # use tc flower rules to offload the vxlan and bridge logic
-    if ${USE_TC}; then
-        sudo tc qdisc add dev vxlan100 ingress
-        sudo tc filter add dev vxlan100 ingress \
-            protocol all prio 1 flower \
-                enc_src_ip ${REMOTE_VTEP_IP} \
-                enc_dst_ip ${LOCAL_VTEP_IP} \
-                enc_dst_port 4789 \
-                ip_flags nofrag \
-                enc_key_id 100 \
-                dst_mac ${LOCAL_VM_VF_MAC} \
-            action tunnel_key unset \
-            action mirred egress redirect dev ${VM_VF_REPRESENTOR}
-        sudo tc filter add dev vxlan100 ingress \
-            protocol all prio 2 flower \
-                enc_src_ip ${REMOTE_VTEP_IP} \
-                enc_dst_ip ${LOCAL_VTEP_IP} \
-                enc_dst_port 4789 \
-                ip_flags nofrag \
-                enc_key_id 100 \
-                dst_mac ${LOCAL_NS_VF_MAC} \
-            action tunnel_key unset \
-            action mirred egress redirect dev ${NS_VF_REPRESENTOR}
+sudo ip link set dev vxlan100 master br-overlays
+sudo bridge vlan add vid 100 dev vxlan100 pvid untagged
 
-        sudo tc qdisc add dev ${VM_VF_REPRESENTOR} ingress
-        sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
-            protocol all prio 1 flower \
-                indev ${VM_VF_REPRESENTOR} \
-                dst_mac ${LOCAL_NS_VF_MAC} \
-            action mirred egress redirect dev ${NS_VF_REPRESENTOR}
-        sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
-            protocol all prio 2 flower \
-                indev ${VM_VF_REPRESENTOR} \
-            action tunnel_key set \
-                src_ip ${LOCAL_VTEP_IP} \
-                dst_ip ${REMOTE_VTEP_IP} \
-                dst_port 4789 \
-                id 100 \
-            action mirred egress redirect dev vxlan100
+# use tc flower rules to offload the vxlan and bridge logic
+if ${USE_TC}; then
+    sudo tc qdisc add dev vxlan100 ingress
+    sudo tc filter add dev vxlan100 ingress \
+        protocol all prio 1 flower \
+            enc_src_ip ${REMOTE_VTEP_IP} \
+            enc_dst_ip ${LOCAL_VTEP_IP} \
+            enc_dst_port 4789 \
+            ip_flags nofrag \
+            enc_key_id 100 \
+            dst_mac ${LOCAL_VM_VF_MAC} \
+        action tunnel_key unset \
+        action mirred egress redirect dev ${VM_VF_REPRESENTOR}
+    sudo tc filter add dev vxlan100 ingress \
+        protocol all prio 2 flower \
+            enc_src_ip ${REMOTE_VTEP_IP} \
+            enc_dst_ip ${LOCAL_VTEP_IP} \
+            enc_dst_port 4789 \
+            ip_flags nofrag \
+            enc_key_id 100 \
+            dst_mac ${LOCAL_NS_VF_MAC} \
+        action tunnel_key unset \
+        action mirred egress redirect dev ${NS_VF_REPRESENTOR}
 
-        sudo tc qdisc add dev ${NS_VF_REPRESENTOR} ingress
-        sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
-            protocol all prio 1 flower \
-                indev ${NS_VF_REPRESENTOR} \
-                dst_mac ${LOCAL_VM_VF_MAC} \
-            action mirred egress redirect dev ${VM_VF_REPRESENTOR}
-        sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
-            protocol all prio 2 flower \
-                indev ${NS_VF_REPRESENTOR} \
-            action tunnel_key set \
-                src_ip ${LOCAL_VTEP_IP} \
-                dst_ip ${REMOTE_VTEP_IP} \
-                dst_port 4789 \
-                id 100 \
-            action mirred egress redirect dev vxlan100
-    fi
+    sudo tc qdisc add dev ${VM_VF_REPRESENTOR} ingress
+    sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
+        protocol all prio 1 flower \
+            indev ${VM_VF_REPRESENTOR} \
+            dst_mac ${LOCAL_NS_VF_MAC} \
+        action mirred egress redirect dev ${NS_VF_REPRESENTOR}
+    sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
+        protocol all prio 2 flower \
+            indev ${VM_VF_REPRESENTOR} \
+        action tunnel_key set \
+            src_ip ${LOCAL_VTEP_IP} \
+            dst_ip ${REMOTE_VTEP_IP} \
+            dst_port 4789 \
+            id 100 \
+        action mirred egress redirect dev vxlan100
+
+    sudo tc qdisc add dev ${NS_VF_REPRESENTOR} ingress
+    sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
+        protocol all prio 1 flower \
+            indev ${NS_VF_REPRESENTOR} \
+            dst_mac ${LOCAL_VM_VF_MAC} \
+        action mirred egress redirect dev ${VM_VF_REPRESENTOR}
+    sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
+        protocol all prio 2 flower \
+            indev ${NS_VF_REPRESENTOR} \
+        action tunnel_key set \
+            src_ip ${LOCAL_VTEP_IP} \
+            dst_ip ${REMOTE_VTEP_IP} \
+            dst_port 4789 \
+            id 100 \
+        action mirred egress redirect dev vxlan100
 fi
