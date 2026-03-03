@@ -13,24 +13,29 @@ case $(hostname) in
     aratinga)
         PF0=enp3s0f0np0
         PF1=enp3s0f1np1
-        VF=enp3s0f0v0
-        VF_REPRESENTOR=enp3s0f0r0
-        VF_BUSID=0000:03:00.2
-        VF_PF=${PF0}
-        VF_NUM=0
-	VTEP_SF=enp3s0f0s42
+        VM_VF=enp3s0f0v0
+        VM_VF_REPRESENTOR=enp3s0f0r0
+        VM_VF_BUSID=0000:03:00.2
+        VM_VF_PF=${PF0}
+        VM_VF_NUM=0
+        NS_VF=enp3s0f1v0
+        NS_VF_REPRESENTOR=enp3s0f1r0
+        NS_VF_BUSID=0000:03:02.2
+        NS_VF_PF=${PF1}
+        NS_VF_NUM=0
+        VTEP_SF=enp3s0f0s42
         VTEP_SF_REPRESENTOR=en3f0pf0sf42
         VTEP_SF_NUM=42
         PF0_BUSID=0000:03:00.0
         PF1_BUSID=0000:03:00.1
         LOCAL_BOND_IP=192.168.70.2
         LOCAL_VTEP_IP=192.168.80.2
-        LOCAL_VTEP_MAC=02:00:00:00:01:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
-        LOCAL_VF_IP=192.168.90.2
-        LOCAL_VF_MAC=02:00:00:00:00:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        LOCAL_VM_VF_IP=192.168.90.2
+        LOCAL_VM_VF_MAC=02:00:00:00:00:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        LOCAL_NS_VF_IP=192.168.90.4
+        LOCAL_NS_VF_MAC=02:00:00:00:00:04 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         REMOTE_BOND_IP=192.168.70.3
         REMOTE_VTEP_IP=192.168.80.3
-        REMOTE_VF_IP=192.168.90.3
         PSK_OUT=0x20f01f80a26f633d85617465686c32552c92c42f
         PSK_IN=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
         REQID_OUT=0x00000011
@@ -42,24 +47,29 @@ case $(hostname) in
     pyrrhura)
         PF0=enp3s0f0np0
         PF1=enp3s0f1np1
-        VF=enp3s0f0v0
-        VF_REPRESENTOR=enp3s0f0r0
-        VF_BUSID=0000:03:00.2
-        VF_PF=${PF0}
-        VF_NUM=0
-	VTEP_SF=enp3s0f0s42
+        VM_VF=enp3s0f0v0
+        VM_VF_REPRESENTOR=enp3s0f0r0
+        VM_VF_BUSID=0000:03:00.2
+        VM_VF_PF=${PF0}
+        VM_VF_NUM=0
+        NS_VF=enp3s0f1v0
+        NS_VF_REPRESENTOR=enp3s0f1r0
+        NS_VF_BUSID=0000:03:02.2
+        NS_VF_PF=${PF1}
+        NS_VF_NUM=0
+        VTEP_SF=enp3s0f0s42
         VTEP_SF_REPRESENTOR=en3f0pf0sf42
         VTEP_SF_NUM=42
         PF0_BUSID=0000:03:00.0
         PF1_BUSID=0000:03:00.1
         LOCAL_BOND_IP=192.168.70.3
         LOCAL_VTEP_IP=192.168.80.3
-        LOCAL_VTEP_MAC=02:00:00:00:01:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
-        LOCAL_VF_IP=192.168.90.3
-        LOCAL_VF_MAC=02:00:00:00:00:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        LOCAL_VM_VF_IP=192.168.90.3
+        LOCAL_VM_VF_MAC=02:00:00:00:00:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        LOCAL_NS_VF_IP=192.168.90.5
+        LOCAL_NS_VF_MAC=02:00:00:00:00:05 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         REMOTE_BOND_IP=192.168.70.2
         REMOTE_VTEP_IP=192.168.80.2
-        REMOTE_VF_IP=192.168.90.2
         PSK_OUT=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
         PSK_IN=0x20f01f80a26f633d85617465686c32552c92c42f
         REQID_OUT=0x00000013
@@ -111,15 +121,19 @@ sudo ip link delete vxlan100 || true
 # single VF (but the extension to multiple VFs should be obvious).
 echo '0' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
 echo '0' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
-echo '1' | sudo tee -a /sys/class/net/${VF_PF}/device/sriov_numvfs
-echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind || true
-echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind || true
+echo '1' | sudo tee -a /sys/class/net/${PF0}/device/sriov_numvfs
+echo '1' | sudo tee -a /sys/class/net/${PF1}/device/sriov_numvfs
+echo "${VM_VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind || true
+echo "${VM_VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind || true
+echo "${NS_VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind || true
+echo "${NS_VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind || true
 
 sudo devlink dev eswitch set pci/${PF0_BUSID} mode legacy
 sudo devlink dev eswitch set pci/${PF1_BUSID} mode legacy
 sudo devlink dev param set pci/${PF0_BUSID} name flow_steering_mode value dmfs cmode runtime
 sudo devlink dev param set pci/${PF1_BUSID} name flow_steering_mode value dmfs cmode runtime
-sudo ip link set ${VF_PF} vf ${VF_NUM} trust on spoofchk off mac ${LOCAL_VF_MAC}
+sudo ip link set ${VM_VF_PF} vf ${VM_VF_NUM} trust on spoofchk off mac ${LOCAL_VM_VF_MAC}
+sudo ip link set ${NS_VF_PF} vf ${NS_VF_NUM} trust on spoofchk off mac ${LOCAL_NS_VF_MAC}
 sudo devlink dev eswitch set pci/${PF0_BUSID} mode switchdev
 sudo devlink dev eswitch set pci/${PF1_BUSID} mode switchdev
 
@@ -134,25 +148,20 @@ sudo ip link set dev ${PF0} mtu ${UNDERLAY_MTU} up
 sudo ip link set dev ${PF1} mtu ${UNDERLAY_MTU} up
 sudo ip link set dev bond0 mtu ${UNDERLAY_MTU} up
 
-sudo ip link set ${VF_REPRESENTOR} mtu ${OVERLAY_MTU} up
+sudo ip link set ${VM_VF_REPRESENTOR} mtu ${OVERLAY_MTU} up
+sudo ip link set ${NS_VF_REPRESENTOR} mtu ${OVERLAY_MTU} up
 
-if ${USE_NET_NAMESPACE} ; then
-    echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/bind
-    sudo ip netns add ns0 || true
-    sudo ip link set dev ${VF} netns ns0
-    sudo ip netns exec ns0 ip addr replace dev ${VF} ${LOCAL_VF_IP}/24
-    sudo ip netns exec ns0 ip link set dev ${VF} mtu ${OVERLAY_MTU} up
-elif ${USE_VM} ; then
-    sudo modprobe vfio-pci || true
-    echo $(cat "/sys/bus/pci/devices/${VF_BUSID}/{vendor,device}") \
-        | sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id || true
-    echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
-    echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
-else
-    echo "${VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/bind
-    sudo ip addr replace dev ${VF} ${LOCAL_VF_IP}/24
-    sudo ip link set dev ${VF} mtu ${OVERLAY_MTU} up
-fi
+sudo modprobe vfio-pci || true
+echo $(cat /sys/bus/pci/devices/${VM_VF_BUSID}/{vendor,device}) \
+| sudo tee -a /sys/bus/pci/drivers/vfio-pci/new_id || true
+echo "${VM_VF_BUSID}" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+
+echo "${NS_VF_BUSID}" | sudo tee /sys/bus/pci/drivers/mlx5_core/bind
+sudo ip netns add ns0 || true
+sudo ip netns add ns1 || true
+sudo ip link set dev ${NS_VF} netns ns0
+sudo ip netns exec ns0 ip addr replace dev ${NS_VF} ${LOCAL_NS_VF_IP}/24
+sudo ip netns exec ns0 ip link set dev ${NS_VF} mtu ${OVERLAY_MTU} up
 
 if $ENABLE_IPSEC; then
 
@@ -217,7 +226,7 @@ if ${USE_OVS} ; then
     sudo ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
     sudo systemctl restart openvswitch-switch.service
     sudo ovs-vsctl add-br br-ovs
-    sudo ovs-vsctl add-port br-ovs ${VF_REPRESENTOR}
+    sudo ovs-vsctl add-port br-ovs ${VM_VF_REPRESENTOR}
     sudo ovs-vsctl add-port br-ovs vxlan1 \
         -- set interface vxlan1 type=vxlan \
         options:local_ip=${LOCAL_VTEP_IP} \
@@ -242,13 +251,18 @@ else
     sudo ip link add br-overlays type bridge \
         stp_state 0 \
         vlan_filtering 1 \
-        vlan_default_pvid 1
+        vlan_default_pvid 0 \
+        mcast_snooping 0
     sudo ip link set dev br-overlays up
-    sudo ip link set dev ${VF_REPRESENTOR} master br-overlays
-    sudo ip link set dev vxlan100 master br-overlays
+    
+    sudo ip link set dev ${VM_VF_REPRESENTOR} master br-overlays
+    sudo bridge vlan add vid 100 dev ${VM_VF_REPRESENTOR} pvid untagged
 
+    sudo ip link set dev ${NS_VF_REPRESENTOR} master br-overlays
+    sudo bridge vlan add vid 100 dev ${NS_VF_REPRESENTOR} pvid untagged
+
+    sudo ip link set dev vxlan100 master br-overlays
     sudo bridge vlan add vid 100 dev vxlan100 pvid untagged
-    sudo bridge vlan add vid 100 dev ${VF_REPRESENTOR} pvid untagged
 
     # use tc flower rules to offload the vxlan and bridge logic
     if ${USE_TC}; then
@@ -260,13 +274,45 @@ else
                 enc_dst_port 4789 \
                 ip_flags nofrag \
                 enc_key_id 100 \
+                dst_mac ${LOCAL_VM_VF_MAC} \
             action tunnel_key unset \
-            action mirred egress redirect dev ${VF_REPRESENTOR}
+            action mirred egress redirect dev ${VM_VF_REPRESENTOR}
+        sudo tc filter add dev vxlan100 ingress \
+            protocol all prio 2 flower \
+                enc_src_ip ${REMOTE_VTEP_IP} \
+                enc_dst_ip ${LOCAL_VTEP_IP} \
+                enc_dst_port 4789 \
+                ip_flags nofrag \
+                enc_key_id 100 \
+                dst_mac ${LOCAL_NS_VF_MAC} \
+            action tunnel_key unset \
+            action mirred egress redirect dev ${NS_VF_REPRESENTOR}
 
-        sudo tc qdisc add dev ${VF_REPRESENTOR} ingress
-        sudo tc filter add dev ${VF_REPRESENTOR} ingress \
+        sudo tc qdisc add dev ${VM_VF_REPRESENTOR} ingress
+        sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
             protocol all prio 1 flower \
-                indev ${VF_REPRESENTOR} \
+                indev ${VM_VF_REPRESENTOR} \
+                dst_mac ${LOCAL_NS_VF_MAC} \
+            action mirred egress redirect dev ${NS_VF_REPRESENTOR}
+        sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
+            protocol all prio 2 flower \
+                indev ${VM_VF_REPRESENTOR} \
+            action tunnel_key set \
+                src_ip ${LOCAL_VTEP_IP} \
+                dst_ip ${REMOTE_VTEP_IP} \
+                dst_port 4789 \
+                id 100 \
+            action mirred egress redirect dev vxlan100
+
+        sudo tc qdisc add dev ${NS_VF_REPRESENTOR} ingress
+        sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
+            protocol all prio 1 flower \
+                indev ${NS_VF_REPRESENTOR} \
+                dst_mac ${LOCAL_VM_VF_MAC} \
+            action mirred egress redirect dev ${VM_VF_REPRESENTOR}
+        sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
+            protocol all prio 2 flower \
+                indev ${NS_VF_REPRESENTOR} \
             action tunnel_key set \
                 src_ip ${LOCAL_VTEP_IP} \
                 dst_ip ${REMOTE_VTEP_IP} \
