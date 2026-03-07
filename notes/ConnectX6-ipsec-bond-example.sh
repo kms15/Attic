@@ -2,7 +2,7 @@
 
 set -xeuo pipefail
 
-ENABLE_IPSEC=true
+ENABLE_IPSEC=false
 USE_TC=true
 
 case $(hostname) in
@@ -33,6 +33,8 @@ case $(hostname) in
         LOCAL_NS_VF_MAC=02:00:00:00:00:04 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         REMOTE_BOND_IP=192.168.70.3
         REMOTE_VTEP_IP=192.168.80.3
+        REMOTE_VM_VF_MAC=02:00:00:00:00:03 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        REMOTE_NS_VF_MAC=02:00:00:00:00:05 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         PSK_OUT=0x20f01f80a26f633d85617465686c32552c92c42f
         PSK_IN=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
         REQID_OUT=0x00000011
@@ -67,6 +69,8 @@ case $(hostname) in
         LOCAL_NS_VF_MAC=02:00:00:00:00:05 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         REMOTE_BOND_IP=192.168.70.2
         REMOTE_VTEP_IP=192.168.80.2
+        REMOTE_VM_VF_MAC=02:00:00:00:00:02 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
+        REMOTE_NS_VF_MAC=02:00:00:00:00:04 # Note: x2:xx:xx:xx:xx:xx mac can be arbitrary
         PSK_OUT=0x6cb228189b4c6e82e66e46920a2cde39187de4ba
         PSK_IN=0x20f01f80a26f633d85617465686c32552c92c42f
         REQID_OUT=0x00000013
@@ -90,17 +94,17 @@ if $ENABLE_IPSEC; then
     sudo ip xfrm policy flush
 fi
 
+sudo ip link set ${PF0} down nomaster
+sudo ip link set ${PF1} down nomaster
 sudo ip link delete bond0 || true
-sudo ip link set ${PF0} down
-sudo ip link set ${PF1} down
 
 sudo ip addr del ${LOCAL_VTEP_IP}/32 dev lo || true
 
+sudo ip link set ${VM_VF_REPRESENTOR} down nomaster || true
+sudo ip link set ${NS_VF_REPRESENTOR} down nomaster || true
+sudo ip link set ${VTEP_SF_REPRESENTOR} down nomaster || true
 sudo devlink port del ${VTEP_SF_REPRESENTOR} || true
-sudo ovs-vsctl del-br br-ovs || true
 sudo ip link del dev br-overlays || true
-sudo ip link del dev br-underlay || true
-sudo ip link del dev br-uplink || true
 sudo ip link delete vxlan100 || true
 
 # Note: we can only set a VF to "trusted" while the NIC is in legacy mode, but
@@ -243,57 +247,180 @@ sudo bridge vlan add vid 100 dev vxlan100 pvid untagged
 
 # use tc flower rules to offload the vxlan and bridge logic
 if ${USE_TC}; then
+
+    # We need the remote VTEP to be in the ARP/neighbor table for offload
+    # to work for the encapsulation rules; we thus ping it here to force
+    # this.
+    ping -c 1 -W 1 ${REMOTE_VTEP_IP} > /dev/null 2>&1 || true
+
     sudo tc qdisc add dev vxlan100 ingress
+
+    # set up the qdisc and some passthrough rules for each netdev
+    for dev in ${VM_VF_REPRESENTOR} ${NS_VF_REPRESENTOR}; do
+        sudo tc qdisc add dev ${dev} ingress
+
+        if false; then
+
+        # arp should be handled in software for IPv4 neighbor discovery
+        sudo tc filter add dev ${dev} ingress \
+            protocol arp prio 100 flower \
+                skip_sw \
+            action pass no_percpu
+
+        # Lots of icmpv6 protocols require special handling (neighbor
+        # discovery, broadcast, and others).
+        sudo tc filter add dev ${dev} ingress \
+            protocol ipv6 prio 101 flower \
+                skip_sw \
+                ip_proto icmpv6 \
+            action pass no_percpu
+
+        # we also don't try to offload ipv4 multicast/IGMP traffic
+        sudo tc filter add dev ${dev} ingress \
+            protocol ip prio 102 flower \
+                skip_sw \
+                ip_proto 2 \
+            action pass no_percpu
+
+        # We also send DHCP unicast traffic through the CPU path for snooping
+        # IPv4 DHCP client->server
+        sudo tc filter add dev ${dev} ingress \
+            protocol ip prio 103 flower \
+                skip_sw \
+                ip_proto udp \
+                src_port 68 \
+                dst_port 67 \
+            action pass no_percpu
+        # IPv4 DHCP server->client
+        sudo tc filter add dev ${dev} ingress \
+            protocol ip prio 104 flower \
+                skip_sw \
+                ip_proto udp \
+                src_port 67 \
+                dst_port 68 \
+            action pass no_percpu
+        # IPv6 DHCP client->server
+        sudo tc filter add dev ${dev} ingress \
+            protocol ipv6 prio 105 flower \
+                skip_sw \
+                ip_proto udp \
+                src_port 546 \
+                dst_port 547 \
+            action pass no_percpu
+        # IPv6 DHCP server->client
+        sudo tc filter add dev ${dev} ingress \
+            protocol ipv6 prio 106 flower \
+                skip_sw \
+                ip_proto udp \
+                src_port 547 \
+                dst_port 546 \
+            action pass no_percpu
+
+        # broadcasts and multicasts should be handled in software
+        sudo tc filter add dev ${dev} ingress \
+            protocol all prio 107 flower \
+                skip_sw \
+                dst_mac 01:00:00:00:00:00/01:00:00:00:00:00 \
+            action pass
+
+        # IPv6 broadcasts are also probably better to keep on the CPU path
+        sudo tc filter add dev ${dev} ingress \
+            protocol ipv6 prio 108 flower \
+                skip_sw \
+                dst_mac 33:33:00:00:00:00/16 \
+            action pass
+        fi
+    done
+
+    # for the vxlan device, de-encapsulate and forward known traffic
     sudo tc filter add dev vxlan100 ingress \
-        protocol all prio 1 flower \
+        protocol all prio 1000 flower \
             enc_src_ip ${REMOTE_VTEP_IP} \
             enc_dst_ip ${LOCAL_VTEP_IP} \
             enc_dst_port 4789 \
             ip_flags nofrag \
             enc_key_id 100 \
             dst_mac ${LOCAL_VM_VF_MAC} \
-        action tunnel_key unset \
-        action mirred egress redirect dev ${VM_VF_REPRESENTOR}
+        action tunnel_key unset no_percpu \
+        action mirred egress redirect dev ${VM_VF_REPRESENTOR} no_percpu
     sudo tc filter add dev vxlan100 ingress \
-        protocol all prio 2 flower \
+        protocol all prio 1000 flower \
             enc_src_ip ${REMOTE_VTEP_IP} \
             enc_dst_ip ${LOCAL_VTEP_IP} \
             enc_dst_port 4789 \
             ip_flags nofrag \
             enc_key_id 100 \
             dst_mac ${LOCAL_NS_VF_MAC} \
-        action tunnel_key unset \
-        action mirred egress redirect dev ${NS_VF_REPRESENTOR}
+        action tunnel_key unset no_percpu \
+        action mirred egress redirect dev ${NS_VF_REPRESENTOR} no_percpu
 
-    sudo tc qdisc add dev ${VM_VF_REPRESENTOR} ingress
     sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
-        protocol all prio 1 flower \
-            indev ${VM_VF_REPRESENTOR} \
+        protocol all prio 1000 flower \
+            skip_sw \
+            ip_flags nofrag \
             dst_mac ${LOCAL_NS_VF_MAC} \
-        action mirred egress redirect dev ${NS_VF_REPRESENTOR}
+        action mirred egress redirect dev ${NS_VF_REPRESENTOR} no_percpu
     sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
-        protocol all prio 2 flower \
-            indev ${VM_VF_REPRESENTOR} \
+        protocol all prio 1000 flower \
+            skip_sw \
+            ip_flags nofrag \
+            dst_mac ${REMOTE_VM_VF_MAC} \
         action tunnel_key set \
             src_ip ${LOCAL_VTEP_IP} \
             dst_ip ${REMOTE_VTEP_IP} \
             dst_port 4789 \
             id 100 \
-        action mirred egress redirect dev vxlan100
+            nocsum \
+            nofrag \
+            no_percpu \
+        action mirred egress redirect dev vxlan100 no_percpu
+    sudo tc filter add dev ${VM_VF_REPRESENTOR} ingress \
+        protocol all prio 1000 flower \
+            skip_sw \
+            ip_flags nofrag \
+            dst_mac ${REMOTE_NS_VF_MAC} \
+        action tunnel_key set \
+            src_ip ${LOCAL_VTEP_IP} \
+            dst_ip ${REMOTE_VTEP_IP} \
+            dst_port 4789 \
+            id 100 \
+            nocsum \
+            nofrag \
+            no_percpu \
+        action mirred egress redirect dev vxlan100 no_percpu
 
-    sudo tc qdisc add dev ${NS_VF_REPRESENTOR} ingress
     sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
-        protocol all prio 1 flower \
-            indev ${NS_VF_REPRESENTOR} \
+        protocol all prio 1000 flower \
+            skip_sw \
+            ip_flags nofrag \
             dst_mac ${LOCAL_VM_VF_MAC} \
         action mirred egress redirect dev ${VM_VF_REPRESENTOR}
     sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
-        protocol all prio 2 flower \
+        protocol all prio 1000 flower \
+            skip_sw \
             indev ${NS_VF_REPRESENTOR} \
+            dst_mac ${REMOTE_VM_VF_MAC} \
         action tunnel_key set \
             src_ip ${LOCAL_VTEP_IP} \
             dst_ip ${REMOTE_VTEP_IP} \
             dst_port 4789 \
             id 100 \
-        action mirred egress redirect dev vxlan100
+            nocsum \
+            nofrag \
+            no_percpu \
+        action mirred egress redirect dev vxlan100 no_percpu
+    sudo tc filter add dev ${NS_VF_REPRESENTOR} ingress \
+        protocol all prio 1000 flower \
+            skip_sw \
+            ip_flags nofrag \
+            dst_mac ${REMOTE_NS_VF_MAC} \
+        action tunnel_key set \
+            src_ip ${LOCAL_VTEP_IP} \
+            dst_ip ${REMOTE_VTEP_IP} \
+            dst_port 4789 \
+            id 100 \
+            nocsum \
+            nofrag \
+            no_percpu \
+        action mirred egress redirect dev vxlan100 no_percpu
 fi
