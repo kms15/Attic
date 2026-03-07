@@ -322,6 +322,11 @@ sudo mstflint --dev 03:00.0 -i fw-ConnectX6Dx-rel-22_47_1088-MCX623106AC-CDA_Ax-
 sudo mstfwreset --dev 03:00.0 reset
 ```
 
+Note that if you're starting with very old firmware you might get the error
+`-E- Burning FS4 image failed: Bad parameter`. In this case, you many have to
+upgrade in stages, e.g. upgrading from 22.32.x to 22.35.x before upgrading to
+22.48.x.
+
 Confirm ipsec acceleration is available:
 
 Example of a working card:
