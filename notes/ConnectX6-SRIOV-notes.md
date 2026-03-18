@@ -241,56 +241,114 @@ ones below but with the packet offload lines removed.
 
 ## Common steps
 
-### Step 0 (once per OS-install) install prerequisites
+### Step 0 (once per OS-install) install prerequisites and build a custom kernel
 
 Install a few common debian packages used in this example
 
 ```
-sudo apt install -y mstflint wget qemu-system-x86 \
-    openvswitch-switch openvswitch-vtep \
-    openvswitch-ipsec strongswan-starter
+sudo apt install -y mstflint wget qemu-system-x86
 ```
-
-Enable openvswitch hardware offloads
+We next install some packages needed to build the kernel (note: cargo-culting
+plus adding more when it failed, definitely not an authorative list)
 
 ```
-sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:hw-offload=true
+sudo apt-get install -y build-essential linux-source bc kmod cpio flex \
+    libncurses-dev libelf-dev libssl-dev dwarves bison debhelper libdw-dev
 ```
 
-You will also need to locate and download the [latest versions of the DOCA-OFED
-drivers](https://developer.nvidia.com/doca-downloads).
+Next we install and unpack the current debian linux kernel source
+(note that the `$(uname [...] | cut [...])` just gives the current kernel
+version, e.g. '6.18', if using debian backports.
 
 ```
-wget https://www.mellanox.com/downloads/DOCA/DOCA_v3.2.1/host/doca-host_3.2.1-044000-25.10-debian13_amd64.deb
+sudo apt-get install -y linux-source-$(uname -r | cut -d. -f1-2)
+tar xaf /usr/src/linux-source-$(uname -r | cut -d. -f1-2).tar.xz
+cd linux-source-$(uname -r | cut -d. -f1-2)
 ```
 
-Unfortunately the DOCA 3.2.1 drivers seem to have compatibility problems with
-newer kernel versions (6.12.48 works, 6.12.57 does not), so you may have to
-pin an older kernel version using something like the following:
+Now we create a kernel config with the correct settings. First we copy the
+current kernel config
 
 ```
-cat << EOF | sudo tee /etc/apt/preferences.d/pin-kernel.pref
-Package: linux-image-amd64
-Pin: version 6.12.48-1
-Pin-Priority: 990
+cp /boot/config-$(uname -r) debian.config
+```
 
-Package: linux-headers-amd64
-Pin: version 6.12.48-1
-Pin-Priority: 990
+We also need a config fragment of options we want to change to enable offloads
+on the ConnectX-6 Dx.
+
+```
+cat <<EOF > mlxnet.config
+CONFIG_NET_TC_SKB_EXT=y            # tc recirculation support, needed for tc
+                                   # offloading in many cases.
+CONFIG_MLX5_EN_IPSEC=y             # Enable ipsec offloading for the mlx5 cards
+CONFIG_MLX5_SF=y                   # Enable Sub Functions on the mlx5 cards
+CONFIG_MLX5_VDPA_NET=m             # Enable VDPA drivers for the mlx5 cards
+
+CONFIG_MLXSW_CORE=m                # Enable driver for Mellanox switches
+CONFIG_LEDS_MLXCPLD=m              # LED support for Mellanox switches
 EOF
 ```
 
-You may also need to manually roll back the kernel packages to this version
-using a tool such as aptitude.
-
-With a compatible kernel version, you can then install the DOCA-OFED drivers,
-e.g.
+We next merge the debian config file with the setting in our mlxnet config
+fragment
 
 ```
-sudo dpkg -i doca-host_3.2.1-044000-25.10-debian13_amd64.deb
-sudo apt-get update
-sudo apt-get -y install doca-ofed
+./scripts/kconfig/merge_config.sh debian.config mlxnet.config
 ```
+
+We then disable module signing and debug info
+
+```
+scripts/config --disable SECURITY_LOCKDOWN_LSM
+scripts/config --disable MODULE_SIG
+scripts/config --disable DEBUG_INFO
+scripts/config --disable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
+scripts/config --disable DEBUG_INFO_BTF
+```
+
+Finally we set any new kernel configurations to their default value
+
+```
+make olddefconfig
+```
+
+We can now build a new kernel. To produce a binary-reproducible output
+(assuming the rest of the toolchain on this build machine is reproducible), we
+manually set the timestamps in the build to the timestamp on the kernel's
+Makefile (which generally set to the date of the release tag when a new kernel
+is released) and set the user and hostname to reproducible values. We also use
+faketime to workaround some remaining debian scripts that still try to embed
+timestamps. We also need to patch one script so that the package changelog will
+list the epoch timestamp as the build date and time (rather than the current
+date and time).
+
+```
+export SOURCE_DATE_EPOCH=$(stat -c %Y Makefile)
+export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ')"
+export KBUILD_BUILD_USER="reproducible-builder"
+export KBUILD_BUILD_HOST="reproducible-env"
+
+sed -i "s/\\\$(date -R)/\
+\$(date -R \${SOURCE_DATE_EPOCH:+ -d @\${SOURCE_DATE_EPOCH} } )/g" \
+    scripts/package/mkdebian
+
+make clean
+time make -j $(nproc) bindeb-pkg
+```
+
+We can then install the new kernel using
+
+```
+sudo dpkg -i ../linux-image-$(uname -r | cut -f1 -d+)_$(uname -r | cut -f1 -d+)-1_amd64.deb
+```
+
+Debian's grub setup seems to not reliably choose the new kernel by default.
+To work around this, we can manually uninstall the old kernel:
+
+```
+sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y linux-image-$(uname -r | cut -f1 -d+)+deb13-amd64
+```
+
 
 
 ### Step 1 (once per NIC) update firmware and max SR-IOV devices
