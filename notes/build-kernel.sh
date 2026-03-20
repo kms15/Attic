@@ -22,7 +22,7 @@ sed -i "s/\\\$(date -R)/\
 # Copy the default debian config for this kernel
 cp /boot/config-$(uname -r) debian.config
 
-# Create a list of kernel config options we want to overide
+# Create a list of kernel config networking options we want to overide
 cat <<EOF > mlxnet.config
 # Enable tc-recirculation support, needed for tc offloading in many cases
 CONFIG_NET_TC_SKB_EXT=y
@@ -39,9 +39,9 @@ CONFIG_MLXSW_CORE=m
 CONFIG_LEDS_MLXCPLD=m
 EOF
 
-# Merge these options with the default debian config
-./scripts/kconfig/merge_config.sh debian.config mlxnet.config
-
+# Create a list of kernel config options we want to overide for reproducible
+# builds.
+cat <<EOF > reproducible-build.config
 # TODO: this option controls a number of security options intended to protect
 # the kernel from a compromised root (e.g. not allowing root to read or write
 # kernel memory). Unfortunately it currently forces module signatures, which
@@ -56,13 +56,18 @@ EOF
 # trusted boot, dm-verity for the root filesystem, and other things that we
 # would need to protect the system agains a compromised root account, we don't
 # loose much from a security standpoint by disabling this for now.
-scripts/config --disable SECURITY_LOCKDOWN_LSM
+CONFIG_SECURITY_LOCKDOWN_LSM=n
+CONFIG_MODULE_SIG=n
 
 # Disable debug information and module signing (for reproducibility)
-scripts/config --disable DEBUG_INFO
-scripts/config --disable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
-scripts/config --disable DEBUG_INFO_BTF
-scripts/config --disable MODULE_SIG
+CONFIG_DEBUG_INFO=n
+CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=n
+CONFIG_DEBUG_INFO_BTF=n
+EOF
+
+# Merge these options with the default debian config
+./scripts/kconfig/merge_config.sh debian.config mlxnet.config \
+	reproducible-build.config
 
 # Fill in any missing required options and fix any option conflicts
 make olddefconfig
