@@ -114,8 +114,8 @@ SERVER_ID="${1:?Usage: $0 <1|2>}"
 
 PF0="enp3s0f0np0"
 PF1="enp3s0f1np1"
-VF0="enp3s0f0v0"
-VF0_REP="enp3s0f0r0"
+VF0="enp3s0f1v0"
+VF0_REP="enp3s0f1r0"
 
 # Tunnel dummy interfaces -- one per PF path.
 # These hold the tunnel source IPs used as VXLAN local and SA src/dst.
@@ -384,7 +384,7 @@ sysctl -qw net.bridge.bridge-nf-call-arptables=0 2>/dev/null || true
 #   a. Unbind VF            mlx5 requires this before eswitch mode change
 #   b. Both PFs to legacy   devlink requires legacy before flow_steering_mode
 #   c. DMFS on both PFs     required for 'offload packet' SA installation
-#   d. PF0 to switchdev     exposes VF0 representor enp3s0f0r0
+#   d. PFs to switchdev     exposes VF0 representor enp3s0f0r0
 #   e. Rebind VF
 #
 # PF1 stays in legacy eswitch mode (used only as second underlay path).
@@ -396,11 +396,11 @@ log "STEP 2: SR-IOV, DMFS, and switchdev"
 ip link set "$PF0" up
 ip link set "$PF1" up
 
-CURRENT_VFS=$(cat /sys/class/net/"$PF0"/device/sriov_numvfs 2>/dev/null || echo 0)
+CURRENT_VFS=$(cat /sys/class/net/"$PF1"/device/sriov_numvfs 2>/dev/null || echo 0)
 if [ "$CURRENT_VFS" -lt 1 ]; then
-    echo 0 > /sys/class/net/"$PF0"/device/sriov_numvfs 2>/dev/null || true
+    echo 0 > /sys/class/net/"$PF1"/device/sriov_numvfs 2>/dev/null || true
     sleep 0.3
-    echo 1 > /sys/class/net/"$PF0"/device/sriov_numvfs
+    echo 1 > /sys/class/net/"$PF1"/device/sriov_numvfs
     sleep 1
 fi
 
@@ -410,7 +410,7 @@ echo "  PF0 PCI: $PCI0"
 echo "  PF1 PCI: $PCI1"
 
 # a. Unbind VF
-VF0_PCI=$(readlink -f /sys/class/net/"$PF0"/device/virtfn0 2>/dev/null \
+VF0_PCI=$(readlink -f /sys/class/net/"$PF1"/device/virtfn0 2>/dev/null \
           | xargs basename 2>/dev/null || true)
 if [ -n "$VF0_PCI" ] && [ -d "/sys/bus/pci/devices/$VF0_PCI/driver" ]; then
     echo "  Unbinding VF $VF0_PCI"
@@ -435,9 +435,14 @@ for PCI in "$PCI0" "$PCI1"; do
 done
 sleep 0.2
 
-# d. PF0 to switchdev
+# d. PFs to switchdev
 devlink dev eswitch set pci/"$PCI0" mode switchdev
 echo "  Switchdev enabled on pci/$PCI0"
+devlink dev eswitch set pci/"$PCI1" mode switchdev
+echo "  Switchdev enabled on pci/$PCI1"
+
+sudo devlink dev param set pci/"$PCI0" name esw_multiport value true cmode runtime
+sudo devlink dev param set pci/"$PCI1" name esw_multiport value true cmode runtime
 
 # e. Rebind VF
 if [ -n "$VF0_PCI" ]; then
