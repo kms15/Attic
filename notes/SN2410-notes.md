@@ -7,11 +7,15 @@ larger) mSATA drive to use with debian. Based on a random forum recommendation
 for a robust drive that's known to work, I chose the Transcend
 TS512GMSA452T-I, but I believe any drive should work.
 
+Of note, on a similar switch (a Checkpoint-branded SN2740 revision A3) the
+drive was an M.2 2242 B-key SATA drive, so there may be some variations in
+CPU boards for these switches.
+
 For the initial boot, you can just download the latest debian AMD64 nocloud
 image, e.g.
 
 ```
-https://cloud.debian.org/images/cloud/trixie/20251006-2257/debian-13-nocloud-amd64-20251006-2257.qcow2
+https://cloud.debian.org/images/cloud/trixie/latest/debian-13-nocloud-amd64.qcow2
 ```
 
 Connect the new mSATA drive to your workstation (e.g. with a[USB to mSATA
