@@ -247,7 +247,8 @@ above).
 ```
 wget https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mellanox/mlxsw_spectrum-13.2010.1502.mfa2
 mkdir -p /lib/firmware/mellanox
-cp /mnt/mlxsw-fw/mlxsw_spectrum-13.2010.1502.mfa2 /lib/firmware/mellanox
+cp mlxsw_spectrum-13.2010.1502.mfa2 /lib/firmware/mellanox
+update-initramfs -u
 ```
 
 ## Updating the firmware
