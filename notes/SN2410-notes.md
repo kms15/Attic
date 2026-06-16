@@ -119,6 +119,20 @@ tar xaf /usr/src/linux-source-$(uname -r | cut -d. -f1-2).tar.xz
 cd linux-source-$(uname -r | cut -d. -f1-2)
 ```
 
+The [mlxsw wiki](
+https://github.com/Mellanox/mlxsw/wiki/Supported-Hardware-And-Firmware),
+The minimum fully supported version of the ASIC firmware is 13.2010.1502 (at
+the time this was written) but the stock driver will only update firmware older
+than 13.2010.1006 to this same version (13.2010.1006). This seems sub-optimal,
+so we patch the driver to require (and update if needed) to the documented
+version 13.2010.1502:
+
+```
+sed -i \
+    "s/^#define MLXSW_SP_FWREV_SUBMINOR 1006$/#define MLXSW_SP_FWREV_SUBMINOR 1502/g" \
+    drivers/net/ethernet/mellanox/mlxsw/spectrum.c
+```
+
 Now we create a kernel config with the correct settings. First we copy the
 current kernel config
 
@@ -221,6 +235,19 @@ To work around this, we can manually uninstall the old kernel:
 
 ```
 sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y linux-image-$(uname -r | cut -f1 -d+)+deb13-amd64
+```
+
+We also want to install the firmware files from the
+[linux firmware repository](
+https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/mellanox
+) to allow the driver to automatically update older versions of the firmware
+(note that the driver version should match the minimum driver version listed
+above).
+
+```
+wget https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/mellanox/mlxsw_spectrum-13.2010.1502.mfa2
+mkdir -p /lib/firmware/mellanox
+cp /mnt/mlxsw-fw/mlxsw_spectrum-13.2010.1502.mfa2 /lib/firmware/mellanox
 ```
 
 ## Updating the firmware
