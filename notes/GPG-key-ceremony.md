@@ -74,8 +74,8 @@ https://developers.redhat.com/articles/2025/10/07/signing-rpm-packages-using-qua
 https://www.gnupg.org/) (LibrePGP-compliant) to tools like [Sequoia-PGP](
 https://sequoia-pgp.org/) with incompatibility between the datastreams
 of the new tools for some key types. Thus you should expect to need to generate
-PQC keys in the next 5 years or so, but it's probably too early to try to do so
-now.
+PQC keys in the next 5 years or so, but it may be better to wait to do so until
+the ecosystem has stabilized and matured a bit more.
 
 ## Create a Debian Live image
 
