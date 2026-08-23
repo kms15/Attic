@@ -1,0 +1,93 @@
+#!/bin/bash
+set -euo pipefail
+
+usage () {
+    echo "Usage:" 1>&2
+    echo "  $0 FORGE (user | group) NAME" 1>&2
+    echo "" 1>&2
+    echo "Examples:" 1>&2
+    echo "  $0 github user todd" 1>&2
+    echo "  $0 gitlab group riaa" 1>&2
+    echo "  $0 gitlab:git.example.com group mib" 1>&2
+    echo "  $0 forgejo:git2.example.com user falco" 1>&2
+}
+
+if ! [[ $# -eq 3 ]]; then
+    usage
+    exit 1
+fi
+
+# Parse forge
+if [[ "$1" == 'github' ]]; then
+    FORGE_TYPE=github
+    FORGE_SITE=github.com
+elif [[ "$1" == 'gitlab' ]]; then
+    FORGE_TYPE=gitlab
+    FORGE_SITE=gitlab.com
+else
+    FORGE_TYPE=$(echo "$1" | cut -d: -f1)
+    FORGE_SITE=$(echo "$1" | cut -d: -f2)
+fi
+
+if [[ "$FORGE_TYPE" != "github" ]] \
+        && [[ "$FORGE_TYPE" != "gitlab" ]] \
+        && [[ "$FORGE_TYPE" != "forgejo" ]]; then
+    echo "Error: unexpected forge type \"$FORGE_TYPE\"" 1>&2
+    usage
+    exit 1
+fi
+
+if [[ -z "$FORGE_SITE" ]]; then
+    echo "Error: no forge site specified" 1>&2
+    usage
+    exit 1
+fi
+
+# Parse user or group
+if [[ "$2" == "user" ]]; then
+    IS_USER=true
+elif [[ "$2" == "group" ]]; then
+    IS_USER=false
+else
+    echo "Error: expected \"user\" or \"group\", but received \"$2\"" 1>&2
+    usage
+    exit 1
+fi
+
+# Parse name
+NAME="$3"
+
+
+CURL="curl --fail --silent --show-error --location"
+
+if [[ -e ~/.netrc ]]; then
+    CURL="$CURL --netrc"
+fi
+
+if [[ "$FORGE_TYPE" == "github" ]]; then
+    if $IS_USER; then
+        $CURL "https://api.github.com/users/${NAME}/repos?per_page=100" \
+            | jq -r '.[].clone_url'
+    else
+        $CURL "https://api.github.com/orgs/${NAME}/repos?per_page=100" \
+            | jq -r '.[].clone_url'
+    fi
+elif [[ "$FORGE_TYPE" == "gitlab" ]]; then
+    if $IS_USER; then
+        $CURL "https://${FORGE_SITE}/api/v4/users/${NAME}/projects?per_page=100" \
+            | jq -r '.[].http_url_to_repo'
+    else
+        $CURL "https://${FORGE_SITE}/api/v4/groups/${NAME}/projects?per_page=100" \
+            | jq -r '.[].http_url_to_repo'
+    fi
+elif [[ "$FORGE_TYPE" == "forgejo" ]]; then
+    if $IS_USER; then
+        $CURL "https://${FORGE_SITE}/api/v1/users/${NAME}/repos?limit=100" \
+            | jq -r '.[].clone_url'
+    else
+        $CURL "https://${FORGE_SITE}/api/v1/orgs/${NAME}/repos?limit=100" \
+            | jq -r '.[].clone_url'
+    fi
+fi
+
+IS_USER=
