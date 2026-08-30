@@ -57,35 +57,37 @@ fi
 # Parse name
 NAME="$3"
 
+# Basic setup
+REPO_BASE_DIR="$(readlink -f .)/${FORGE_SITE}/${NAME}"
+mkdir -p "$REPO_BASE_DIR"
 
-CURL="curl --fail --silent --show-error --location"
+pushd "$REPO_BASE_DIR" > /dev/null
+CURRENT_REPO_SLUGS="$(ls -1 | xargs basename -s .git -a 2>/dev/null || true)"
+popd > /dev/null
 
-if [[ -e ~/.netrc ]]; then
-    CURL="$CURL --netrc"
-fi
+echo "Fetching repository list..."
+LIST_REPOS=$(dirname $(readlink -f "$0"))/list-repos
+REPO_URL_LIST=$($LIST_REPOS "$1" "$2" "$3")
+REPO_SLUG_LIST=$(echo $REPO_URL_LIST | sed 's@\S*/\([^/ \t]*\).git@\1@g')
 
-if [[ "$FORGE_TYPE" == "github" ]]; then
-    if $IS_USER; then
-        $CURL "https://api.github.com/users/${NAME}/repos?per_page=100" \
-            | jq -r '.[].clone_url'
-    else
-        $CURL "https://api.github.com/orgs/${NAME}/repos?per_page=100" \
-            | jq -r '.[].clone_url'
+# Remove projects that were removed upstream
+for slug in $CURRENT_REPO_SLUGS; do
+    if !( echo $REPO_SLUG_LIST | grep -q $slug ); then
+        echo removing project $slug that was not found upstream
+        rm -rf "${REPO_BASE_DIR}/${slug}.git"
     fi
-elif [[ "$FORGE_TYPE" == "gitlab" ]]; then
-    if $IS_USER; then
-        $CURL "https://${FORGE_SITE}/api/v4/users/${NAME}/projects?per_page=100" \
-            | jq -r '.[].http_url_to_repo'
+done
+
+# Clone or update projects from upstream
+for url in $REPO_URL_LIST; do
+    slug=$(echo $url | sed 's@\S*/\([^/ \t]*\).git@\1@g')
+
+    REPO_DIR="${REPO_BASE_DIR}/${slug}.git"
+    if ! [[ -e "$REPO_DIR" ]]; then
+        echo "Cloning $slug into ${REPO_DIR}"
+        git clone --mirror "$url" "$REPO_DIR"
     else
-        $CURL "https://${FORGE_SITE}/api/v4/groups/${NAME}/projects?per_page=100" \
-            | jq -r '.[].http_url_to_repo'
+        echo "Updating $slug in ${REPO_DIR}"
+        git -C "$REPO_DIR" remote update --prune
     fi
-elif [[ "$FORGE_TYPE" == "forgejo" ]]; then
-    if $IS_USER; then
-        $CURL "https://${FORGE_SITE}/api/v1/users/${NAME}/repos?limit=100" \
-            | jq -r '.[].clone_url'
-    else
-        $CURL "https://${FORGE_SITE}/api/v1/orgs/${NAME}/repos?limit=100" \
-            | jq -r '.[].clone_url'
-    fi
-fi
+done
