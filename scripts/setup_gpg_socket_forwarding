@@ -148,7 +148,7 @@ fi
 if ! grep -q "^Host $REMOTE_HOST_NICKNAME$" ~/.ssh/config; then
     cat <<- EOF >> ~/.ssh/config
 
-		# Connect to $HOSTNAME with GPG and SSH agent forwarding
+		# Connect to $REMOTE_HOSTNAME with GPG and SSH agent forwarding
 		Host $REMOTE_HOST_NICKNAME
 		    Hostname $REMOTE_HOSTNAME
 
