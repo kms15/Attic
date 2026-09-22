@@ -8,8 +8,10 @@ if [[ $# != 1 ]]; then
     echo "" 1>&2
     echo "Prepare the local machine and REMOTE_HOSTNAME to allow for SSH" 1>&2
     echo "and GPG agent forwarding from the local machine to the remote" 1>&2
-    echo "machine, including dynamically switching between local and" 1>&2
-    echo "agents (e.g. in a screen session) using " 1>&2
+    echo "machine, including allowing dynamically switching between the" 1>&2
+    echo "local and the forwarded agents (e.g. in a screen session) by" 1>&2
+    echo "using the shell aliases \"use-agent-$HOSTNAME\" and" 1>&2
+    echo "\"use-agent-local\"." 1>&2
     exit 1
 fi
 
@@ -66,13 +68,20 @@ fi
 
 # Ensure that the local machine keeps a link to the current SSH_AUTH_SOCK that
 # we can forward to the remote machine.
-if ! grep -q "ln -fs \"\${SSH_AUTH_SOCK}\" $LOCAL_CONSOLE_SSH_SOCK" ~/.profile; then
-    cat <<- EOF >> ~/.profile
+if ! grep -q "ln -fs \"\${SSH_AUTH_SOCK}\" $LOCAL_CONSOLE_SSH_SOCK" ~/.bashrc; then
+    cat <<- EOF >> ~/.bashrc
 
-		# Store the local ssh agent's socket in a well-known location for
-		# forwarding or restoring after overriding.
-		if [ -z "\$SSH_CONNECTION" ] && [ -n "\$SSH_AUTH_SOCK" ]; then
+		# If this is a fresh console session, store the local ssh agent's
+		# socket in a well-known location for forwarding or restoring after
+		# overriding.
+		if [ -z "{\$SSH_AUTH_SOCK_CONSOLE_SAVED:-}" ] \\
+		        && [ "\$SHLVL" -eq 1 ] \\
+		        && [ "\$BASH_SUBSHELL" -eq 0 ] \\
+		        && [ -z "\${SSH_CONNECTION:-}" ] \\
+		        && [ -n "\${SSH_AUTH_SOCK:-}" ]; then
+
 		    ln -fs "\${SSH_AUTH_SOCK}" $LOCAL_CONSOLE_SSH_SOCK
+		    export SSH_AUTH_SOCK_CONSOLE_SAVED=\${SSH_AUTH_SOCK}
 		fi
 
 		# Set up an alias to manually switch back to the local SSH and GPG agents
@@ -90,13 +99,20 @@ fi
 # Ensure that the remote machine keeps a link to the console's SSH_AUTH_SOCK
 # and an alias to force a session to use the console's agents (rather than a
 # forwarded remote agent).
-if ! $SSH grep -q "\"ln -fs \\\"\\\${SSH_AUTH_SOCK}\\\" $REMOTE_CONSOLE_SSH_SOCK\"" ~/.profile; then
-    cat <<- EOF | $SSH tee -a ~/.profile
+if ! $SSH grep -q "\"ln -fs \\\"\\\${SSH_AUTH_SOCK}\\\" $REMOTE_CONSOLE_SSH_SOCK\"" ~/.bashrc; then
+    cat <<- EOF | $SSH tee -a ~/.bashrc
 
-		# Store the local ssh agent's socket in a well-known location for
-		# forwarding or restoring after overriding.
-		if [ -z "\$SSH_CONNECTION" ] && [ -n "\$SSH_AUTH_SOCK" ]; then
+		# If this is a fresh console session, store the local ssh agent's
+		# socket in a well-known location for forwarding or restoring after
+		# overriding.
+		if [ -z "{\$SSH_AUTH_SOCK_CONSOLE_SAVED:-}" ] \\
+		        && [ "\$SHLVL" -eq 1 ] \\
+		        && [ "\$BASH_SUBSHELL" -eq 0 ] \\
+		        && [ -z "\${SSH_CONNECTION:-}" ] \\
+		        && [ -n "\${SSH_AUTH_SOCK:-}" ]; then
+
 		    ln -fs "\${SSH_AUTH_SOCK}" $REMOTE_CONSOLE_SSH_SOCK
+		    export SSH_AUTH_SOCK_CONSOLE_SAVED=\${SSH_AUTH_SOCK}
 		fi
 
 		# Set up an alias to manually switch back to the local SSH and GPG agents
@@ -109,8 +125,8 @@ fi
 # Set up an alias to switch to this host's forwarded SSH and GPG agents and
 # and use SSH_AGENT_HOST_HINT if present to use the forwarded agents by
 # default for these logins.
-if ! $SSH grep -q "\"alias use-agent-${HOSTNAME}=\"" ~/.profile; then
-    cat <<- EOF | $SSH tee -a ~/.profile
+if ! $SSH grep -q "\"alias use-agent-${HOSTNAME}=\"" ~/.bashrc; then
+    cat <<- EOF | $SSH tee -a ~/.bashrc
 
 		# Set up aliases for switching between local and remote gpg and ssh agents
 		alias use-agent-${HOSTNAME}="export GNUPGHOME=$FORWARDED_SOCKET_DIR SSH_AUTH_SOCK=$FORWARDED_SOCKET_DIR/ssh_socket"
@@ -121,6 +137,7 @@ if ! $SSH grep -q "\"alias use-agent-${HOSTNAME}=\"" ~/.profile; then
 		# in authorized_keys.
 		if [ "\$SSH_AGENT_HOST_HINT" = "$HOSTNAME" ]; then
 		    use-agent-${HOSTNAME}
+		    unset SSH_AGENT_HOST_HINT
 		fi
 		EOF
 
@@ -163,3 +180,17 @@ if ! grep -q "^Host $REMOTE_HOST_NICKNAME$" ~/.ssh/config; then
 		    SetEnv SSH_AGENT_HOST_HINT=${HOSTNAME}
 		EOF
 fi
+
+echo "Configuration completed. You can now SSH with GPG and SSH agent "
+echo "forwarding using"
+echo ""
+echo "    ssh $REMOTE_HOST_NICKNAME"
+echo ""
+echo "and select the forwarded agents using the alias"
+echo ""
+echo "    use-agent-${HOSTNAME}"
+echo ""
+echo "or the remote console's agents using the alias"
+echo ""
+echo "    use-agent-local"
+echo ""
