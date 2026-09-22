@@ -1,0 +1,6 @@
+#!/bin/bash
+mkdir -pm 700 ~/.gnupg-simplified
+gpg --export \
+    --export-filter keep-uid='uid = Kendrick Shaw <kms15@kendrickshaw.org>' \
+    271D0D73F0B42A3A2234C54EA94DEC98148B01E1 \
+    | gpg --homedir "~/.gnupg-simplified" --import
