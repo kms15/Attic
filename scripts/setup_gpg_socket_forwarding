@@ -1,0 +1,165 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ $# != 1 ]]; then
+    echo "Usage: " 1>&2
+    echo "    $0 REMOTE_HOSTNAME" 1>&2
+    echo "" 1>&2
+    echo "Prepare the local machine and REMOTE_HOSTNAME to allow for SSH" 1>&2
+    echo "and GPG agent forwarding from the local machine to the remote" 1>&2
+    echo "machine, including dynamically switching between local and" 1>&2
+    echo "agents (e.g. in a screen session) using " 1>&2
+    exit 1
+fi
+
+REMOTE_HOSTNAME=$1
+SSH="ssh $REMOTE_HOSTNAME"
+SSH_WITH_TERMINAL="ssh -t $REMOTE_HOSTNAME"
+REMOTE_HOME=$($SSH echo \$HOME)
+REMOTE_HOST_NICKNAME=$(echo $REMOTE_HOSTNAME | cut -d. -f1)-with-agents
+
+# set up the remote GPG and SSH agent forwarding directory
+FORWARDED_SOCKET_DIR=${REMOTE_HOME}/.local/share/forwarded-agents-${HOSTNAME}
+$SSH mkdir -pm 700 $FORWARDED_SOCKET_DIR
+$SSH ln -sf ${REMOTE_HOME}/.gnupg/pubring.kbx $FORWARDED_SOCKET_DIR/
+$SSH ln -sf ${REMOTE_HOME}/.gnupg/trustdb.gpg $FORWARDED_SOCKET_DIR/
+
+# generate the relevant path names for sockets
+LOCAL_CONSOLE_GPG_SOCK=$(gpgconf --list-dir agent-extra-socket)
+REMOTE_FORWARDED_GPG_SOCK=$($SSH \
+    GNUPGHOME=$FORWARDED_SOCKET_DIR gpgconf --list-dir agent-socket)
+LOCAL_CONSOLE_SSH_SOCK=${HOME}/.ssh/local_agent_sock
+REMOTE_CONSOLE_SSH_SOCK=${HOME}/.ssh/local_agent_sock
+REMOTE_FORWARDED_SSH_SOCK=${FORWARDED_SOCKET_DIR}/ssh_socket
+
+# Tweak some remote sshd settings if needed (and we have sudo)
+# These changes are needed for two optional "nice to have" features:
+# 1) Automatically clean up an old agent after a broken connection
+# 2) Default to the forwarded SSH and GPG agents when we SSH in
+if (! $SSH grep -q "'^Match User ${USER}$'" /etc/ssh/sshd_config) \
+        && ($SSH groups | grep -q sudo); then
+
+    # We can't skip creating a temporary file on the remote host as sudo may
+    # require a terminal for the user to enter the remote password.
+    cat <<- EOF | $SSH tee sshd_config_addition
+
+		Match User $USER
+		    # Allow binding over SSH/GPG agent sockets from old connections.
+		    # Note that this only applies to sockets we already could overwrite/delete,
+		    # but does mean it's even more important to set "restrict" (or at least
+		    # no-port-forwarding) for forced commands in the authorized keys file for
+		    # this user.
+		    StreamLocalBindUnlink yes
+
+		    # Allow passing an agent-forwarding hint from the client to the server
+		    # (in addition to the normal terminal and langauge environment variables).
+		    AcceptEnv LANG LC_* COLORTERM NO_COLOR SSH_AGENT_HOST_HINT
+		EOF
+    $SSH_WITH_TERMINAL bash -c '"\
+        cat sshd_config_addition \
+            | sudo tee -a /etc/ssh/sshd_config \
+        && sudo systemctl restart sshd.service \
+        "'
+    $SSH rm sshd_config_addition
+fi
+
+# Ensure that the local machine keeps a link to the current SSH_AUTH_SOCK that
+# we can forward to the remote machine.
+if ! grep -q "ln -fs \"\${SSH_AUTH_SOCK}\" $LOCAL_CONSOLE_SSH_SOCK" ~/.profile; then
+    cat <<- EOF >> ~/.profile
+
+		# Store the local ssh agent's socket in a well-known location for
+		# forwarding or restoring after overriding.
+		if [ -z "\$SSH_CONNECTION" ] && [ -n "\$SSH_AUTH_SOCK" ]; then
+		    ln -fs "\${SSH_AUTH_SOCK}" $LOCAL_CONSOLE_SSH_SOCK
+		fi
+
+		# Set up an alias to manually switch back to the local SSH and GPG agents
+		alias use-agent-local="export GNUPGHOME=$HOME/.gnupg SSH_AUTH_SOCK=$LOCAL_CONSOLE_SSH_SOCK"
+		EOF
+
+    mkdir -p ~/.ssh/sockets
+
+    # create the soft link now (if we're on a local login)
+    if [ -z "${SSH_CONNECTION:-}" ] && [ -n "${SSH_AUTH_SOCK:-}" ]; then
+        ln -fs "${SSH_AUTH_SOCK}" $LOCAL_CONSOLE_SSH_SOCK
+    fi
+fi
+
+# Ensure that the remote machine keeps a link to the console's SSH_AUTH_SOCK
+# and an alias to force a session to use the console's agents (rather than a
+# forwarded remote agent).
+if ! $SSH grep -q "\"ln -fs \\\"\\\${SSH_AUTH_SOCK}\\\" $REMOTE_CONSOLE_SSH_SOCK\"" ~/.profile; then
+    cat <<- EOF | $SSH tee -a ~/.profile
+
+		# Store the local ssh agent's socket in a well-known location for
+		# forwarding or restoring after overriding.
+		if [ -z "\$SSH_CONNECTION" ] && [ -n "\$SSH_AUTH_SOCK" ]; then
+		    ln -fs "\${SSH_AUTH_SOCK}" $REMOTE_CONSOLE_SSH_SOCK
+		fi
+
+		# Set up an alias to manually switch back to the local SSH and GPG agents
+		alias use-agent-local="export GNUPGHOME=$HOME/.gnupg SSH_AUTH_SOCK=$REMOTE_CONSOLE_SSH_SOCK"
+		EOF
+
+    $SSH mkdir -p ~/.ssh/sockets
+fi
+
+# Set up an alias to switch to this host's forwarded SSH and GPG agents and
+# and use SSH_AGENT_HOST_HINT if present to use the forwarded agents by
+# default for these logins.
+if ! $SSH grep -q "\"alias use-agent-${HOSTNAME}=\"" ~/.profile; then
+    cat <<- EOF | $SSH tee -a ~/.profile
+
+		# Set up aliases for switching between local and remote gpg and ssh agents
+		alias use-agent-${HOSTNAME}="export GNUPGHOME=$FORWARDED_SOCKET_DIR SSH_AUTH_SOCK=$FORWARDED_SOCKET_DIR/ssh_socket"
+
+		# Set up the default GPG and SSH agent for SSH connections from $HOSTNAME
+		# Note: Intentionaly cautious about how we use SSH_AGENT_HOST_HINT contents
+		# in order to limit what this variable can do when used with a forced command
+		# in authorized_keys.
+		if [ "\$SSH_AGENT_HOST_HINT" = "$HOSTNAME" ]; then
+		    use-agent-${HOSTNAME}
+		fi
+		EOF
+
+    $SSH mkdir -p ~/.ssh/sockets
+fi
+
+# Add the ssh config entry to connect to this host with agent forwarding
+if ! grep -q "^Host $REMOTE_HOST_NICKNAME$" ~/.ssh/config; then
+    cat <<- EOF >> ~/.ssh/config
+
+		# Connect to $HOSTNAME with GPG and SSH agent forwarding
+		Host $REMOTE_HOST_NICKNAME
+		    Hostname $REMOTE_HOSTNAME
+
+		    # Forward the SSH and GPG agents (note: on version updates you may need to
+		    # adjust the GPG socket forwarding to match the output of
+		    # "gpgconf --list-dirs agent-socket" and "gpgconf --list-dirs agent-socket"
+		    # from the appropriate GNUPGHOME directories on the appropriate hosts.
+		    RemoteForward $REMOTE_FORWARDED_SSH_SOCK $LOCAL_CONSOLE_SSH_SOCK
+		    RemoteForward $REMOTE_FORWARDED_GPG_SOCK $LOCAL_CONSOLE_GPG_SOCK
+
+		    # Fail loudly if the forwarding fails rather than trying to continue (as
+		    # this entry is specifically for when we do want agent forwarding)
+		    ExitOnForwardFailure yes
+
+		    # Don't use the standard SSH agent forwarding (we want to use a well-known
+		    # socket location).
+		    ForwardAgent no
+
+		    # Reuse the session for multiple logins, keeping it around for up to one
+		    # minute after logout (Tune as needed - one minute seems long enough for
+		    # most scripts with multiple ssh commands, but short enough to minimize
+		    # opportunity to use GPG/SSH agent after logout).
+		    ControlMaster auto
+		    ControlPath ~/.ssh/sockets/$REMOTE_HOST_NICKNAME
+		    ControlPersist 1m
+
+		    # Identify ourselves to the remote machine to allow it to default for this
+		    # session to using the GPG and SSH agents we are forwarding.
+		    SetEnv SSH_AGENT_HOST_HINT=${HOSTNAME}
+		EOF
+fi
